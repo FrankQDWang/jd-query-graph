@@ -23,12 +23,18 @@ def test_inspect_jds_command_outputs_summary(tmp_path: Path) -> None:
     input_path.write_text(
         json.dumps(
             {
-                "jd_id": "job-001",
-                "title": "Backend Engineer",
-                "description": "Build Go services on Kubernetes.",
-                "language": "en",
-                "source": "fixture",
-            }
+                "canonical_source_key": "detail_id:1",
+                "source_url": "https://example.invalid/job/1",
+                "title": "示例岗位甲",
+                "team": "示例团队",
+                "location": "示例城市",
+                "cities": ["示例城市"],
+                "responsibilities": ["负责候选需求甲。"],
+                "qualifications": [],
+                "raw_snapshot_path": "raw_pages/details/1.md",
+                "raw_snapshot_sha256": "abc123",
+            },
+            ensure_ascii=False,
         )
         + "\n",
         encoding="utf-8",
@@ -40,10 +46,10 @@ def test_inspect_jds_command_outputs_summary(tmp_path: Path) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload == {
+        "city_counts": {"示例城市": 1},
         "status": "ok",
+        "team_counts": {"示例团队": 1},
         "total_records": 1,
-        "language_counts": {"en": 1},
-        "source_counts": {"fixture": 1},
     }
 
 
