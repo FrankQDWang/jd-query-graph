@@ -1,27 +1,76 @@
-schema_version: jd-query-relationships-v1
+schema_version: jd-query-relationships-v2
 relationship_types:
   - name: MENTIONED_IN
-    description: Query surface is mentioned in a source JD.
-    source: QuerySurface
-    target: SourceJD
-  - name: ALIAS_OF
-    description: Surface is an alias of another surface.
-    source: QuerySurface
-    target: QuerySurface
-  - name: EQUIVALENT_TO
-    description: Surface has equivalent query meaning.
-    source: QuerySurface
-    target: QuerySurface
+    description: Query term is extracted from a source JD field.
+    source: QueryTerm
+    target: JobPosting
+    required_properties:
+      - source_field
+      - source_index
+      - evidence_text
+      - char_start
+      - char_end
+      - extractor
+      - model
+      - confidence
+      - status
+  - name: SAME_AS
+    description: Query terms are effectively interchangeable for resume search.
+    source: QueryTerm
+    target: QueryTerm
+    required_properties:
+      - evidence_type
+      - evidence_text
+      - source_jd_ids
+      - candidate_source
+      - confidence
+      - extractor
+      - model
+      - status
+  - name: VARIANT_OF
+    description: Query term is a spelling, language, abbreviation, symbol, or version variant of another term.
+    source: QueryTerm
+    target: QueryTerm
+    required_properties:
+      - evidence_type
+      - evidence_text
+      - source_jd_ids
+      - candidate_source
+      - confidence
+      - extractor
+      - model
+      - status
   - name: RELATED_TO
-    description: Surface is semantically or operationally related.
-    source: QuerySurface
-    target: QuerySurface
+    description: Query terms are related for recruiting search but are not interchangeable.
+    source: QueryTerm
+    target: QueryTerm
+    required_properties:
+      - evidence_type
+      - evidence_text
+      - source_jd_ids
+      - candidate_source
+      - confidence
+      - extractor
+      - model
+      - relation_rationale
+      - status
   - name: CO_OCCURS_WITH
-    description: Surfaces co-occur in JD evidence windows.
-    source: QuerySurface
-    target: QuerySurface
-  - name: HAS_RECALL_OBSERVATION
-    description: Surface has a provider count observation.
-    source: QuerySurface
+    description: Query terms co-occur in a JD, field, sentence, paragraph, or fixed window.
+    source: QueryTerm
+    target: QueryTerm
+    required_properties:
+      - cooccurrence_count
+      - window_type
+      - support
+      - score
+      - sample_evidence
+      - status
+  - name: HAS_RECALL
+    description: Query term has a provider recall count observation.
+    source: QueryTerm
     target: RecallObservation
-
+    required_properties:
+      - provider
+      - query_mode
+      - probe_run_id
+      - created_at

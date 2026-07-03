@@ -14,8 +14,10 @@ def test_validate_config_command_outputs_summary() -> None:
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["status"] == "ok"
-    assert payload["node_type_count"] >= 2
-    assert "ALIAS_OF" in payload["relationship_types"]
+    assert payload["node_label_count"] == 3
+    assert "QueryTerm" in payload["node_labels"]
+    assert "CAPABILITY" in payload["term_categories"]
+    assert "SAME_AS" in payload["relationship_types"]
 
 
 def test_inspect_jds_command_outputs_summary(tmp_path: Path) -> None:

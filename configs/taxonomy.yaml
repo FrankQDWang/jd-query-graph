@@ -1,30 +1,21 @@
-schema_version: jd-query-taxonomy-v1
-node_types:
-  - name: QuerySurface
-    description: Searchable term surface that may be probed against CTS.
-    serving: true
-  - name: Skill
-    description: Candidate skill query term.
-    serving: true
-  - name: Tool
-    description: Candidate tool query term.
-    serving: true
-  - name: Framework
-    description: Candidate framework query term.
-    serving: true
-  - name: ProgrammingLanguage
-    description: Candidate programming language query term.
-    serving: true
-  - name: Role
-    description: Job family or role query term.
-    serving: true
-  - name: Domain
-    description: Domain or business area query term.
-    serving: true
-  - name: SourceJD
-    description: Source JD document.
-    serving: false
+schema_version: jd-query-taxonomy-v2
+node_labels:
+  - name: JobPosting
+    description: A canonical source JD.
+  - name: QueryTerm
+    description: Candidate resume search query term extracted from JD evidence.
   - name: RecallObservation
-    description: CTS or provider recall count observation.
-    serving: false
-
+    description: Provider recall count observation for one query term.
+term_categories:
+  - name: CAPABILITY
+    description: Capability, requirement, responsibility, experience, or transferable ability.
+  - name: TECH_OBJECT
+    description: Technical object, tool, platform, system, product, or engineering object.
+  - name: DOMAIN_CONTEXT
+    description: Business domain, business scenario, or industry context.
+  - name: ROLE_CONTEXT
+    description: Job family, function, or role context.
+  - name: QUALIFIER
+    description: Search modifier or narrowing condition.
+  - name: UNKNOWN
+    description: Term category is unclear and requires post-processing or review.
