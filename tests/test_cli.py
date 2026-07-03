@@ -228,3 +228,53 @@ def test_write_fake_extraction_artifact_honors_limit(
     ]
     assert len(artifact_rows) == 1
     assert artifact_rows[0]["canonical_source_key"] == "detail_id:1"
+
+
+def test_query_artifact_command_returns_related_terms(tmp_path: Path) -> None:
+    artifact_path = tmp_path / "extraction.jsonl"
+    artifact_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "record_type": "term",
+                        "text": "term-alpha",
+                        "evidence_text": "负责候选需求甲。",
+                        "canonical_source_key": "detail_id:1",
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "record_type": "term",
+                        "text": "term-beta",
+                        "evidence_text": "负责候选需求乙。",
+                        "canonical_source_key": "detail_id:1",
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "record_type": "relationship",
+                        "source_text": "term-alpha",
+                        "target_text": "term-beta",
+                        "relationship_type": "RELATED_TO",
+                        "evidence_text": "负责候选需求甲。负责候选需求乙。",
+                        "confidence": 0.74,
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["query-artifact", str(artifact_path), "term-alpha"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["status"] == "ok"
+    assert payload["response"]["query"] == "term-alpha"
+    assert payload["response"]["related_terms"][0]["text"] == "term-beta"

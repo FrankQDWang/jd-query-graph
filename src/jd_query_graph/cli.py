@@ -18,6 +18,8 @@ from jd_query_graph.jd_input import (
     iter_jd_records,
     summarize_jds,
 )
+from jd_query_graph.query import build_query_response
+from jd_query_graph.recall import FakeRecallProvider
 from jd_query_graph.schema import build_graphrag_schema as build_graphrag_schema_payload
 
 app = typer.Typer(no_args_is_help=True)
@@ -131,6 +133,32 @@ def write_fake_extraction_artifact(
         rows.append((record, extractor.extract(record, extraction_text)))
     summary = write_extraction_artifact(output, rows)
     _echo_json({"status": "ok", **summary, "output": str(output)})
+
+
+@app.command()
+def query_artifact(artifact_jsonl: Path, query: str) -> None:
+    """Query an extraction artifact with fake recall observations."""
+
+    terms: list[str] = []
+    relationships: list[dict[str, object]] = []
+    with artifact_jsonl.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if row.get("record_type") == "term":
+                terms.append(str(row["text"]))
+            elif row.get("record_type") == "relationship":
+                relationships.append(row)
+    provider = FakeRecallProvider(dict.fromkeys(terms, 0))
+    observations = {term: provider.count(term) for term in terms}
+    response = build_query_response(
+        query=query,
+        terms=terms,
+        relationships=relationships,
+        observations=observations,
+    )
+    _echo_json({"status": "ok", "response": response})
 
 
 def main() -> None:
