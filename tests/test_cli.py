@@ -86,3 +86,145 @@ def test_copy_corpus_command_outputs_summary(tmp_path: Path) -> None:
         "status": "ok",
         "target_path": str(target),
     }
+
+
+def test_write_fake_extraction_artifact_command_writes_artifact(
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "jds.jsonl"
+    output_path = tmp_path / "extraction.jsonl"
+    input_path.write_text(
+        json.dumps(
+            {
+                "canonical_source_key": "detail_id:1",
+                "source_url": "https://example.invalid/job/1",
+                "title": "示例岗位甲",
+                "cities": ["示例城市"],
+                "responsibilities": ["负责候选需求甲。"],
+                "qualifications": [],
+                "raw_snapshot_path": "raw_pages/details/1.md",
+                "raw_snapshot_sha256": "abc123",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "write-fake-extraction-artifact",
+            str(input_path),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["status"] == "ok"
+    assert payload["job_count"] == 1
+    assert output_path.exists()
+    artifact_row = json.loads(output_path.read_text(encoding="utf-8"))
+    assert artifact_row["extractor"] == "fake-graphrag"
+    assert artifact_row["model"] == "fake-model"
+    assert artifact_row["prompt_version"] == "fake-prompt-v1"
+
+
+def test_write_fake_extraction_artifact_uses_truthful_source_field(
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "jds.jsonl"
+    output_path = tmp_path / "extraction.jsonl"
+    input_path.write_text(
+        json.dumps(
+            {
+                "canonical_source_key": "detail_id:1",
+                "source_url": "https://example.invalid/job/1",
+                "team": "示例团队",
+                "cities": ["示例城市"],
+                "responsibilities": ["负责候选需求甲。"],
+                "qualifications": [],
+                "raw_snapshot_path": "raw_pages/details/1.md",
+                "raw_snapshot_sha256": "abc123",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "write-fake-extraction-artifact",
+            str(input_path),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    artifact_row = json.loads(output_path.read_text(encoding="utf-8"))
+    assert artifact_row["evidence_text"] == "team: 示例团队"
+    assert artifact_row["source_field"] == "team"
+    assert artifact_row["source_index"] is None
+
+
+def test_write_fake_extraction_artifact_honors_limit(
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "jds.jsonl"
+    output_path = tmp_path / "extraction.jsonl"
+    rows = [
+        {
+            "canonical_source_key": "detail_id:1",
+            "source_url": "https://example.invalid/job/1",
+            "title": "示例岗位甲",
+            "cities": ["示例城市"],
+            "responsibilities": [],
+            "qualifications": [],
+            "raw_snapshot_path": "raw_pages/details/1.md",
+            "raw_snapshot_sha256": "abc123",
+        },
+        {
+            "canonical_source_key": "detail_id:2",
+            "source_url": "https://example.invalid/job/2",
+            "title": "示例岗位乙",
+            "cities": ["示例城市"],
+            "responsibilities": [],
+            "qualifications": [],
+            "raw_snapshot_path": "raw_pages/details/2.md",
+            "raw_snapshot_sha256": "def456",
+        },
+    ]
+    input_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "write-fake-extraction-artifact",
+            str(input_path),
+            "--output",
+            str(output_path),
+            "--limit",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["job_count"] == 1
+    artifact_rows = [
+        json.loads(line)
+        for line in output_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(artifact_rows) == 1
+    assert artifact_rows[0]["canonical_source_key"] == "detail_id:1"
