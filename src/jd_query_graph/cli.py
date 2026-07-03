@@ -9,6 +9,7 @@ from typing import Annotated
 import typer
 
 from jd_query_graph.config import graph_config_summary, load_graph_config
+from jd_query_graph.corpus import DEFAULT_LOCAL_CORPUS, copy_corpus
 from jd_query_graph.jd_input import iter_jd_records, summarize_jds
 
 app = typer.Typer(no_args_is_help=True)
@@ -38,6 +39,34 @@ def validate_config(
     _echo_json(payload)
 
 
+@app.command("copy-corpus")
+def copy_corpus_command(
+    source: Annotated[
+        Path | None,
+        typer.Option(
+            "--source",
+            help="Source JD JSONL corpus path. Defaults to env or local example path.",
+        ),
+    ] = None,
+    target: Annotated[
+        Path,
+        typer.Option("--target", help="Target ignored local corpus path."),
+    ] = DEFAULT_LOCAL_CORPUS,
+) -> None:
+    """Copy a local ByteDance corpus into this repo's ignored data dir."""
+
+    result = copy_corpus(source_path=source, target_path=target)
+    _echo_json(
+        {
+            "status": "ok",
+            "source_path": str(result.source_path),
+            "target_path": str(result.target_path),
+            "line_count": result.line_count,
+            "byte_size": result.byte_size,
+        }
+    )
+
+
 @app.command()
 def inspect_jds(input_jsonl: Path) -> None:
     """Validate and summarize fixed-format JD JSONL."""
@@ -53,4 +82,3 @@ def main() -> None:
 
 def _echo_json(payload: dict[str, object]) -> None:
     typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-

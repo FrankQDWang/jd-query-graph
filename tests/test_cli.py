@@ -46,3 +46,24 @@ def test_inspect_jds_command_outputs_summary(tmp_path: Path) -> None:
         "source_counts": {"fixture": 1},
     }
 
+
+def test_copy_corpus_command_outputs_summary(tmp_path: Path) -> None:
+    source = tmp_path / "source.jsonl"
+    target = tmp_path / "copied.jsonl"
+    source.write_text('{"canonical_source_key":"job-1"}\n', encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        ["copy-corpus", "--source", str(source), "--target", str(target)],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload == {
+        "byte_size": source.stat().st_size,
+        "line_count": 1,
+        "source_path": str(source),
+        "status": "ok",
+        "target_path": str(target),
+    }
