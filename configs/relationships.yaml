@@ -1,0 +1,27 @@
+schema_version: jd-query-relationships-v1
+relationship_types:
+  - name: MENTIONED_IN
+    description: Query surface is mentioned in a source JD.
+    source: QuerySurface
+    target: SourceJD
+  - name: ALIAS_OF
+    description: Surface is an alias of another surface.
+    source: QuerySurface
+    target: QuerySurface
+  - name: EQUIVALENT_TO
+    description: Surface has equivalent query meaning.
+    source: QuerySurface
+    target: QuerySurface
+  - name: RELATED_TO
+    description: Surface is semantically or operationally related.
+    source: QuerySurface
+    target: QuerySurface
+  - name: CO_OCCURS_WITH
+    description: Surfaces co-occur in JD evidence windows.
+    source: QuerySurface
+    target: QuerySurface
+  - name: HAS_RECALL_OBSERVATION
+    description: Surface has a provider count observation.
+    source: QuerySurface
+    target: RecallObservation
+
