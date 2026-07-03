@@ -14,9 +14,8 @@ build/
 dist/
 *.egg-info/
 
-data/
+/data/
 artifacts/
 *.db
 *.sqlite
 *.sqlite3
-
