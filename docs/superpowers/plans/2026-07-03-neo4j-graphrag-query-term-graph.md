@@ -1,4 +1,4 @@
-# Neo4j GraphRAG Query Term Graph Phase 1 Implementation Plan
+# Neo4j GraphRAG Query Term Graph Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -12,7 +12,35 @@
 
 ## Scope Check
 
-This plan implements the first testable slice of the approved spec, not the full production system. It deliberately excludes real CTS calls, full 9530-JD extraction, community detection, and production release readiness. Those need separate plans after this slice proves the schema and extraction contracts.
+This merged plan keeps the completed initial scaffold context and the current Phase 1 execution steps in one document. Phase 1 implements the first testable slice of the approved spec, not the full production system. It deliberately excludes real CTS calls, full 9530-JD extraction, community detection, and production release readiness. Those need separate plans after this slice proves the schema and extraction contracts.
+
+## Phase 0: Initial Scaffold Context
+
+The initial scaffold established the Python backend repository shape before the approved Neo4j GraphRAG query-term graph spec was written.
+
+**Original goal:** Create the initial internal Python backend repository for a Neo4j-backed JD query-term graph tool.
+
+**Original architecture:** Start with tested contracts around declarative graph configs and fixed-format JD JSONL ingestion. Keep Neo4j GraphRAG behind a later extraction adapter so the repo is usable before live Neo4j, LLM, or CTS credentials exist.
+
+**Initial scaffold files:**
+
+- `configs/taxonomy.yaml`: declarative node type taxonomy.
+- `configs/relationships.yaml`: declarative relationship type taxonomy.
+- `src/jd_query_graph/config.py`: config models and validation.
+- `src/jd_query_graph/jd_input.py`: fixed JD JSONL parsing and summary.
+- `src/jd_query_graph/cli.py`: CLI entrypoint for config validation and JD inspection.
+- `tests/test_config_models.py`: config contract tests.
+- `tests/test_jd_records.py`: JD input contract tests.
+- `tests/test_cli.py`: CLI smoke tests.
+
+**Initial scaffold tasks:**
+
+- Config contracts: test valid config loading and unknown relationship endpoint rejection; implement Pydantic models and loader.
+- JD JSONL contracts: test valid JD parsing and malformed record rejection; implement JD record parser and summary.
+- CLI contracts: test `validate-config` and `inspect-jds`; implement Typer CLI.
+- Repository verification: run `uv run pytest` and `uv run ruff check .`.
+
+Phase 1 below supersedes the scaffold schema where the spec says the scaffold was temporary, especially the fine-grained `Skill`, `Tool`, `Framework`, and `ProgrammingLanguage` node types.
 
 ## File Structure
 
