@@ -16,6 +16,10 @@ First target:
 The first version is an internal tool. It may depend on Neo4j, builder-only LLM
 credentials, and CTS credentials. It is not a lightweight user-side package.
 
+Phase 1 validates configs and data contracts, copies the local ByteDance corpus,
+and emits fake extraction artifacts for structure checks only. It does not run
+live GraphRAG extraction, write to Neo4j, or call CTS.
+
 ## Local Stack
 
 ```bash
@@ -25,21 +29,46 @@ uv run jd-query-graph validate-config
 uv run jd-query-graph inspect-jds path/to/jds.jsonl
 ```
 
-## Fixed JD JSONL Shape
+## ByteDance JD JSONL Contract
 
 Each line must be a JSON object:
 
 ```json
 {
-  "jd_id": "job-001",
+  "canonical_source_key": "bytedance:job-001",
+  "source_url": "https://jobs.bytedance.com/en/position/001/detail",
+  "job_id": "001",
   "title": "Backend Engineer",
-  "company": "Example",
-  "description": "Responsible for Go, Kubernetes, and graph services.",
-  "language": "en",
-  "source": "local-corpus",
-  "url": "https://example.invalid/jobs/001"
+  "team": "Engineering",
+  "location": "Shanghai",
+  "cities": ["Shanghai"],
+  "job_type": "Full-time",
+  "responsibilities": ["Build graph-backed backend services."],
+  "qualifications": ["Experience with Python and graph databases."],
+  "raw_snapshot_path": "raw/bytedance/job-001.html",
+  "raw_snapshot_sha256": "0123456789abcdef...",
+  "collected_at": "2026-07-03T00:00:00Z",
+  "parse_confidence": 0.98
 }
 ```
 
-Only `jd_id`, `title`, `description`, and `source` are required.
+The canonical ByteDance corpus records source identity, posting metadata,
+structured text fields, raw snapshot provenance, collection time, and parse
+confidence for each job.
 
+Required parser fields are `canonical_source_key`, `source_url`, `cities`,
+`responsibilities`, `qualifications`, `raw_snapshot_path`, and
+`raw_snapshot_sha256`. The other listed fields are optional or contextual
+metadata when present in the source corpus.
+
+## Phase 1 Commands
+
+```bash
+uv run --extra dev jd-query-graph validate-config
+uv run --extra dev jd-query-graph build-graphrag-schema
+uv run --extra dev jd-query-graph copy-corpus
+uv run --extra dev jd-query-graph inspect-jds data/corpora/bytedance/factual_jobs_mainland.jsonl
+uv run --extra dev jd-query-graph write-fake-extraction-artifact data/corpora/bytedance/factual_jobs_mainland.jsonl --output artifacts/extraction/sample.jsonl --limit 20
+```
+
+`data/` and `artifacts/` are local working directories and are ignored by git.
