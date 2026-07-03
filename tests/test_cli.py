@@ -20,6 +20,17 @@ def test_validate_config_command_outputs_summary() -> None:
     assert "SAME_AS" in payload["relationship_types"]
 
 
+def test_build_graphrag_schema_command_outputs_schema() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["build-graphrag-schema"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["status"] == "ok"
+    assert ["QueryTerm", "SAME_AS", "QueryTerm"] in payload["schema"]["patterns"]
+
+
 def test_inspect_jds_command_outputs_summary(tmp_path: Path) -> None:
     input_path = tmp_path / "jds.jsonl"
     input_path.write_text(

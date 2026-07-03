@@ -11,6 +11,7 @@ import typer
 from jd_query_graph.config import graph_config_summary, load_graph_config
 from jd_query_graph.corpus import DEFAULT_LOCAL_CORPUS, copy_corpus
 from jd_query_graph.jd_input import iter_jd_records, summarize_jds
+from jd_query_graph.schema import build_graphrag_schema as build_graphrag_schema_payload
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -37,6 +38,16 @@ def validate_config(
     graph_config = load_graph_config(taxonomy, relationships)
     payload = {"status": "ok", **graph_config_summary(graph_config)}
     _echo_json(payload)
+
+
+@app.command()
+def build_graphrag_schema() -> None:
+    """Print the GraphRAG schema derived from repo config."""
+
+    graph_config = load_graph_config()
+    _echo_json(
+        {"status": "ok", "schema": build_graphrag_schema_payload(graph_config)}
+    )
 
 
 @app.command("copy-corpus")
