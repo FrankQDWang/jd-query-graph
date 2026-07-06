@@ -15,6 +15,21 @@ from jd_query_graph.query import build_query_response
 from jd_query_graph.recall import FakeRecallProvider, RecallObservation
 
 TERM_RELATIONSHIP_TYPES = {"SAME_AS", "VARIANT_OF", "RELATED_TO", "CO_OCCURS_WITH"}
+RECALL_OBSERVATION_FIELD_TYPES = {
+    "observation_id": str,
+    "provider": str,
+    "query_text": str,
+    "query_mode": str,
+    "total": int,
+    "status": str,
+    "recall_bucket": str,
+    "observed_at": str,
+    "probe_run_id": str,
+    "request_hash": str,
+    "error_code": str,
+    "created_at": str,
+}
+NULLABLE_RECALL_OBSERVATION_FIELDS = {"total", "recall_bucket", "error_code"}
 
 
 class Neo4jSession(Protocol):
@@ -194,7 +209,9 @@ def query_neo4j_response(
             WHERE term.text = $query OR term.normalized_text = $normalized_query
             OPTIONAL MATCH (term)-[:HAS_RECALL]->(observation:RecallObservation)
             RETURN properties(term) AS term, properties(observation) AS observation
-            ORDER BY CASE WHEN term.text = $query THEN 0 ELSE 1 END
+            ORDER BY CASE WHEN term.text = $query THEN 0 ELSE 1 END,
+              term.term_id,
+              term.text
             LIMIT 1
             """,
             query=query,
@@ -621,7 +638,43 @@ def _observation_mapping(
         raise ArtifactGraphError(
             "Neo4j query returned observation payload in unexpected shape"
         )
+    _validate_recall_observation_payload(term_text, payload)
     return {term_text: RecallObservation.model_validate(payload)}
+
+
+def _validate_recall_observation_payload(
+    term_text: str,
+    payload: dict[str, Any],
+) -> None:
+    allowed_keys = set(RECALL_OBSERVATION_FIELD_TYPES)
+    unexpected_keys = sorted(set(payload) - allowed_keys)
+    if unexpected_keys:
+        raise ArtifactGraphError(
+            f"Neo4j query returned observation payload for {term_text} "
+            f"has unexpected keys: {', '.join(unexpected_keys)}"
+        )
+
+    for field_name, field_type in RECALL_OBSERVATION_FIELD_TYPES.items():
+        if field_name not in payload:
+            continue
+        value = payload[field_name]
+        if value is None and field_name in NULLABLE_RECALL_OBSERVATION_FIELDS:
+            continue
+        if field_type is int:
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ArtifactGraphError(
+                    f"Neo4j query returned observation payload for {term_text} "
+                    f"field {field_name}: expected int or null"
+                )
+            continue
+        if not isinstance(value, field_type):
+            expected_type = field_type.__name__
+            if field_name in NULLABLE_RECALL_OBSERVATION_FIELDS:
+                expected_type = f"{expected_type} or null"
+            raise ArtifactGraphError(
+                f"Neo4j query returned observation payload for {term_text} "
+                f"field {field_name}: expected {expected_type}"
+            )
 
 
 def _normalize_query(query: str) -> str:

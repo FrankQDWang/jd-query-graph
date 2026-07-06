@@ -631,6 +631,11 @@ def test_query_neo4j_response_returns_normalized_match() -> None:
         "cts_total": 2,
         "status": "ok",
     }
+    assert (
+        "ORDER BY CASE WHEN term.text = $query THEN 0 ELSE 1 END, "
+        "term.term_id, term.text"
+        in _single_line_cypher(session.calls[0][0])
+    )
 
 
 def test_query_neo4j_response_returns_incoming_relationship_direction() -> None:
@@ -680,4 +685,42 @@ def test_query_neo4j_response_rejects_unexpected_relationship_record_shape() -> 
     )
 
     with pytest.raises(ArtifactGraphError, match="relationship payload"):
+        query_neo4j_response(session, "term-alpha")
+
+
+def test_query_neo4j_response_rejects_string_observation_total() -> None:
+    observation = _recall_observation("term-alpha")
+    observation["total"] = "3"
+    session = FakeQuerySession(
+        term_rows=[
+            _term_record(
+                "term-alpha",
+                observation=observation,
+            )
+        ]
+    )
+
+    with pytest.raises(
+        ArtifactGraphError,
+        match="observation payload for term-alpha field total: expected int or null",
+    ):
+        query_neo4j_response(session, "term-alpha")
+
+
+def test_query_neo4j_response_rejects_unexpected_observation_key() -> None:
+    observation = _recall_observation("term-alpha")
+    observation["unexpected"] = "value"
+    session = FakeQuerySession(
+        term_rows=[
+            _term_record(
+                "term-alpha",
+                observation=observation,
+            )
+        ]
+    )
+
+    with pytest.raises(
+        ArtifactGraphError,
+        match="observation payload for term-alpha has unexpected keys: unexpected",
+    ):
         query_neo4j_response(session, "term-alpha")
