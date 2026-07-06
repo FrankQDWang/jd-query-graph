@@ -1,10 +1,12 @@
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 import jd_query_graph.cli as cli
 from jd_query_graph.cli import app
+from jd_query_graph.neo4j_io import Neo4jWriteSummary
 
 
 def test_validate_config_command_outputs_summary() -> None:
@@ -289,15 +291,14 @@ def test_write_neo4j_artifact_command_outputs_summary_and_uses_session(
     settings = object()
     graph = object()
     session = object()
+    summary = Neo4jWriteSummary(
+        job_count=1,
+        term_count=2,
+        mentioned_in_count=3,
+        relationship_count=4,
+        recall_observation_count=5,
+    )
     events: list[tuple[str, object]] = []
-
-    class FakeSummary:
-        def __init__(self) -> None:
-            self.job_count = 1
-            self.term_count = 2
-            self.mentioned_in_count = 3
-            self.relationship_count = 4
-            self.recall_observation_count = 5
 
     class FakeSessionContext:
         def __init__(self, received_settings: object) -> None:
@@ -317,7 +318,7 @@ def test_write_neo4j_artifact_command_outputs_summary_and_uses_session(
     def fake_write_artifact_graph(received_session: object, received_graph: object):
         events.append(("write_session", received_session))
         events.append(("write_graph", received_graph))
-        return FakeSummary()
+        return summary
 
     monkeypatch.setattr(cli, "load_neo4j_settings", lambda: settings)
     monkeypatch.setattr(cli, "load_artifact_graph", fake_load_artifact_graph)
@@ -336,14 +337,7 @@ def test_write_neo4j_artifact_command_outputs_summary_and_uses_session(
         ("write_graph", graph),
         ("exit", session),
     ]
-    assert json.loads(result.output) == {
-        "job_count": 1,
-        "mentioned_in_count": 3,
-        "recall_observation_count": 5,
-        "relationship_count": 4,
-        "status": "ok",
-        "term_count": 2,
-    }
+    assert json.loads(result.output) == {"status": "ok", **asdict(summary)}
 
 
 def test_query_neo4j_command_outputs_response_and_uses_session(monkeypatch) -> None:

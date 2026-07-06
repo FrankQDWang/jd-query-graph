@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
 
@@ -176,16 +177,7 @@ def write_neo4j_artifact(artifact_jsonl: Path) -> None:
     graph = load_artifact_graph(artifact_jsonl)
     with neo4j_session(settings) as session:
         summary = write_artifact_graph(session, graph)
-    _echo_json(
-        {
-            "status": "ok",
-            "job_count": summary.job_count,
-            "term_count": summary.term_count,
-            "mentioned_in_count": summary.mentioned_in_count,
-            "relationship_count": summary.relationship_count,
-            "recall_observation_count": summary.recall_observation_count,
-        }
-    )
+    _echo_json({"status": "ok", **asdict(summary)})
 
 
 @app.command("query-neo4j")
