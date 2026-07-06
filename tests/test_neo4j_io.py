@@ -10,6 +10,7 @@ from jd_query_graph.neo4j_io import (
     Neo4jWriteSummary,
     load_artifact_graph,
     load_neo4j_settings,
+    query_neo4j_response,
     schema_statements,
     write_artifact_graph,
 )
@@ -75,6 +76,84 @@ class FakeNeo4jSession:
     def run(self, cypher: str, **parameters: object) -> object:
         self.calls.append((cypher, parameters))
         return object()
+
+
+class FakeRecord(dict):
+    def data(self) -> dict[str, object]:
+        return dict(self)
+
+
+class FakeQuerySession:
+    def __init__(
+        self,
+        term_rows: list[FakeRecord],
+        relationship_rows: list[FakeRecord] | None = None,
+    ) -> None:
+        self.term_rows = term_rows
+        self.relationship_rows = relationship_rows or []
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def run(self, cypher: str, **parameters: object) -> list[FakeRecord]:
+        self.calls.append((cypher, parameters))
+        if "RETURN properties(term) AS term" in cypher:
+            return self.term_rows
+        return self.relationship_rows
+
+
+def _recall_observation(term_text: str, total: int = 0) -> dict[str, object]:
+    return {
+        "observation_id": f"obs:{term_text}",
+        "provider": "fake-cts",
+        "query_text": term_text,
+        "query_mode": "exact",
+        "total": total,
+        "status": "ok",
+        "recall_bucket": "0" if total == 0 else "1_9",
+        "observed_at": "2026-07-03T00:00:00Z",
+        "probe_run_id": "fake-probe-run",
+        "request_hash": f"hash:{term_text}",
+        "error_code": None,
+        "created_at": "2026-07-03T00:00:00Z",
+    }
+
+
+def _term_record(
+    text: str,
+    *,
+    term_id: str = "term:alpha",
+    normalized_text: str | None = None,
+    observation: dict[str, object] | None = None,
+) -> FakeRecord:
+    return FakeRecord(
+        {
+            "term": {
+                "term_id": term_id,
+                "text": text,
+                "normalized_text": normalized_text or text,
+            },
+            "observation": observation,
+        }
+    )
+
+
+def _relationship_record(
+    source_text: str,
+    target_text: str,
+    *,
+    observation_text: str,
+) -> FakeRecord:
+    return FakeRecord(
+        {
+            "relationship": {
+                "source_text": source_text,
+                "target_text": target_text,
+                "relationship_type": "RELATED_TO",
+                "evidence_text": "alpha beta",
+                "confidence": 0.74,
+            },
+            "neighbor_observation": _recall_observation(observation_text),
+        }
+    )
 
 
 def _single_line_cypher(cypher: str) -> str:
@@ -464,3 +543,141 @@ def test_write_artifact_graph_rejects_unsupported_term_relationship_type() -> No
 
     with pytest.raises(ArtifactGraphError, match="unsupported relationship type"):
         write_artifact_graph(FakeNeo4jSession(), graph, apply_schema_first=False)
+
+
+def test_query_neo4j_response_returns_exact_match_with_outgoing_relationship() -> None:
+    session = FakeQuerySession(
+        term_rows=[
+            _term_record(
+                "term-alpha",
+                observation=_recall_observation("term-alpha", total=3),
+            )
+        ],
+        relationship_rows=[
+            _relationship_record(
+                "term-alpha",
+                "term-beta",
+                observation_text="term-beta",
+            )
+        ],
+    )
+
+    response = query_neo4j_response(session, "term-alpha")
+
+    assert response == {
+        "response_version": "query-response-v1",
+        "snapshot_id": "neo4j-local",
+        "generated_at": "2026-07-06T00:00:00Z",
+        "query": "term-alpha",
+        "normalized_query": "term-alpha",
+        "exact": {
+            "text": "term-alpha",
+            "match_type": "exact",
+            "cts_total": 3,
+            "status": "ok",
+        },
+        "related_terms": [
+            {
+                "text": "term-beta",
+                "relationship_type": "RELATED_TO",
+                "direction": "outgoing",
+                "cts_total": 0,
+                "status": "ok",
+                "evidence_text": "alpha beta",
+                "confidence": 0.74,
+            }
+        ],
+    }
+    assert session.calls[0][1]["query"] == "term-alpha"
+    assert session.calls[0][1]["normalized_query"] == "term-alpha"
+    assert session.calls[1][1]["term_id"] == "term:alpha"
+    assert sorted(session.calls[1][1]["relationship_types"]) == [
+        "CO_OCCURS_WITH",
+        "RELATED_TO",
+        "SAME_AS",
+        "VARIANT_OF",
+    ]
+
+
+def test_query_neo4j_response_returns_unmatched_unknown_response() -> None:
+    response = query_neo4j_response(FakeQuerySession(term_rows=[]), "missing")
+
+    assert response["exact"] == {
+        "text": "missing",
+        "match_type": "unmatched",
+        "cts_total": None,
+        "status": "unknown",
+    }
+    assert response["related_terms"] == []
+
+
+def test_query_neo4j_response_returns_normalized_match() -> None:
+    session = FakeQuerySession(
+        term_rows=[
+            _term_record(
+                "term alpha",
+                normalized_text="term alpha",
+                observation=_recall_observation("term alpha", total=2),
+            )
+        ]
+    )
+
+    response = query_neo4j_response(session, "  TERM   ALPHA  ")
+
+    assert response["normalized_query"] == "term alpha"
+    assert response["exact"] == {
+        "text": "term alpha",
+        "match_type": "normalized",
+        "cts_total": 2,
+        "status": "ok",
+    }
+
+
+def test_query_neo4j_response_returns_incoming_relationship_direction() -> None:
+    session = FakeQuerySession(
+        term_rows=[
+            _term_record(
+                "term-beta",
+                term_id="term:beta",
+                observation=_recall_observation("term-beta", total=1),
+            )
+        ],
+        relationship_rows=[
+            _relationship_record(
+                "term-alpha",
+                "term-beta",
+                observation_text="term-alpha",
+            )
+        ],
+    )
+
+    response = query_neo4j_response(session, "term-beta")
+
+    assert response["related_terms"] == [
+        {
+            "text": "term-alpha",
+            "relationship_type": "RELATED_TO",
+            "direction": "incoming",
+            "cts_total": 0,
+            "status": "ok",
+            "evidence_text": "alpha beta",
+            "confidence": 0.74,
+        }
+    ]
+
+
+def test_query_neo4j_response_rejects_unexpected_term_record_shape() -> None:
+    session = FakeQuerySession(term_rows=[FakeRecord({"term": "not-a-map"})])
+
+    with pytest.raises(ArtifactGraphError, match="term payload"):
+        query_neo4j_response(session, "term-alpha")
+
+
+def test_query_neo4j_response_rejects_unexpected_relationship_record_shape() -> None:
+    session = FakeQuerySession(
+        term_rows=[_term_record("term-alpha")],
+        relationship_rows=[FakeRecord({"relationship": "not-a-map"})],
+    )
+
+    with pytest.raises(ArtifactGraphError, match="relationship payload"):
+        query_neo4j_response(session, "term-alpha")

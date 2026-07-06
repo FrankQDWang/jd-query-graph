@@ -11,7 +11,8 @@ from typing import Any, Protocol
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from jd_query_graph.recall import FakeRecallProvider
+from jd_query_graph.query import build_query_response
+from jd_query_graph.recall import FakeRecallProvider, RecallObservation
 
 TERM_RELATIONSHIP_TYPES = {"SAME_AS", "VARIANT_OF", "RELATED_TO", "CO_OCCURS_WITH"}
 
@@ -174,6 +175,127 @@ def write_artifact_graph(
         mentioned_in_count=len(graph.mentioned_in),
         relationship_count=len(graph.term_relationships),
         recall_observation_count=len(graph.recall_observations),
+    )
+
+
+def query_neo4j_response(
+    session: Neo4jSession,
+    query: str,
+    snapshot_id: str = "neo4j-local",
+    generated_at: str = "2026-07-06T00:00:00Z",
+) -> dict[str, Any]:
+    """Read Neo4j query-term records and return the artifact query shape."""
+
+    normalized_query = _normalize_query(query)
+    term_rows = _neo4j_result_rows(
+        session.run(
+            """
+            MATCH (term:QueryTerm)
+            WHERE term.text = $query OR term.normalized_text = $normalized_query
+            OPTIONAL MATCH (term)-[:HAS_RECALL]->(observation:RecallObservation)
+            RETURN properties(term) AS term, properties(observation) AS observation
+            ORDER BY CASE WHEN term.text = $query THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            query=query,
+            normalized_query=normalized_query,
+        )
+    )
+    if not term_rows:
+        return build_query_response(
+            query=query,
+            terms=[],
+            relationships=[],
+            observations={},
+            snapshot_id=snapshot_id,
+            generated_at=generated_at,
+        )
+
+    term_payload = _required_mapping(
+        term_rows[0],
+        "term",
+        "Neo4j query returned term payload in unexpected shape",
+    )
+    matched_text = _required_record_str(term_payload, "text", "term payload")
+    matched_term_id = _required_record_str(term_payload, "term_id", "term payload")
+    observations = _observation_mapping(
+        matched_text,
+        term_rows[0].get("observation"),
+    )
+
+    relationship_rows = _neo4j_result_rows(
+        session.run(
+            """
+            MATCH (source:QueryTerm)-[relationship]->(target:QueryTerm)
+            WHERE type(relationship) IN $relationship_types
+              AND (source.term_id = $term_id OR target.term_id = $term_id)
+            WITH source, relationship, target,
+              CASE
+                WHEN source.term_id = $term_id THEN target
+                ELSE source
+              END AS neighbor
+            OPTIONAL MATCH (neighbor)-[:HAS_RECALL]->(
+              neighbor_observation:RecallObservation
+            )
+            RETURN {
+              source_text: source.text,
+              target_text: target.text,
+              relationship_type: type(relationship),
+              evidence_text: relationship.evidence_text,
+              confidence: relationship.confidence
+            } AS relationship,
+            properties(neighbor_observation) AS neighbor_observation
+            """,
+            term_id=matched_term_id,
+            relationship_types=sorted(TERM_RELATIONSHIP_TYPES),
+        )
+    )
+
+    relationships: list[dict[str, Any]] = []
+    terms = [matched_text]
+    for row in relationship_rows:
+        relationship = dict(
+            _required_mapping(
+                row,
+                "relationship",
+                "Neo4j query returned relationship payload in unexpected shape",
+            )
+        )
+        source_text = _required_record_str(
+            relationship,
+            "source_text",
+            "relationship payload",
+        )
+        target_text = _required_record_str(
+            relationship,
+            "target_text",
+            "relationship payload",
+        )
+        _required_record_str(relationship, "relationship_type", "relationship payload")
+        _required_record_str(relationship, "evidence_text", "relationship payload")
+        relationship["confidence"] = _required_record_number(
+            relationship,
+            "confidence",
+            "relationship payload",
+        )
+
+        neighbor_text = target_text if source_text == matched_text else source_text
+        terms.append(neighbor_text)
+        relationships.append(relationship)
+        observations.update(
+            _observation_mapping(
+                neighbor_text,
+                row.get("neighbor_observation"),
+            )
+        )
+
+    return build_query_response(
+        query=query,
+        terms=terms,
+        relationships=relationships,
+        observations=observations,
+        snapshot_id=snapshot_id,
+        generated_at=generated_at,
     )
 
 
@@ -433,6 +555,77 @@ def _number_field(
             f"line {line_number} field {field_name}: expected number"
         )
     return float(value)
+
+
+def _neo4j_result_rows(result: object) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    try:
+        iterator = iter(result)  # type: ignore[arg-type]
+    except TypeError as error:
+        raise ArtifactGraphError("Neo4j query returned non-iterable result") from error
+    for record in iterator:
+        data = getattr(record, "data", None)
+        if not callable(data):
+            raise ArtifactGraphError("Neo4j query returned record without data()")
+        row = data()
+        if not isinstance(row, dict):
+            raise ArtifactGraphError("Neo4j query returned row in unexpected shape")
+        rows.append(row)
+    return rows
+
+
+def _required_mapping(
+    row: dict[str, Any],
+    field_name: str,
+    message: str,
+) -> dict[str, Any]:
+    value = row.get(field_name)
+    if not isinstance(value, dict):
+        raise ArtifactGraphError(message)
+    return value
+
+
+def _required_record_str(
+    row: dict[str, Any],
+    field_name: str,
+    payload_name: str,
+) -> str:
+    value = row.get(field_name)
+    if value is None or str(value) == "":
+        raise ArtifactGraphError(
+            f"Neo4j query returned {payload_name} with missing {field_name}"
+        )
+    return str(value)
+
+
+def _required_record_number(
+    row: dict[str, Any],
+    field_name: str,
+    payload_name: str,
+) -> float:
+    value = row.get(field_name)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ArtifactGraphError(
+            f"Neo4j query returned {payload_name} with invalid {field_name}"
+        )
+    return float(value)
+
+
+def _observation_mapping(
+    term_text: str,
+    payload: object,
+) -> dict[str, RecallObservation]:
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise ArtifactGraphError(
+            "Neo4j query returned observation payload in unexpected shape"
+        )
+    return {term_text: RecallObservation.model_validate(payload)}
+
+
+def _normalize_query(query: str) -> str:
+    return " ".join(query.strip().casefold().split())
 
 
 def _stable_hash(prefix: str, *parts: str) -> str:
