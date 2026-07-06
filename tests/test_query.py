@@ -11,6 +11,7 @@ def test_build_query_response_returns_exact_and_related_terms() -> None:
                 "source_text": "term-alpha",
                 "target_text": "term-beta",
                 "relationship_type": "RELATED_TO",
+                "status": "candidate",
                 "evidence_text": "负责候选需求甲。负责候选需求乙。",
                 "confidence": 0.74,
             }
@@ -54,6 +55,7 @@ def test_build_query_response_returns_exact_and_related_terms() -> None:
             "direction": "outgoing",
             "cts_total": 8,
             "status": "ok",
+            "relationship_status": "candidate",
             "evidence_text": "负责候选需求甲。负责候选需求乙。",
             "confidence": 0.74,
         }
@@ -139,6 +141,7 @@ def test_build_query_response_returns_incoming_related_terms() -> None:
             "direction": "incoming",
             "cts_total": 42,
             "status": "ok",
+            "relationship_status": "candidate",
             "evidence_text": "负责候选需求甲。负责候选需求乙。",
             "confidence": 0.74,
         }

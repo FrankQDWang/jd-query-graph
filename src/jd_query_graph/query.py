@@ -82,6 +82,7 @@ def _related_terms(
                 "relationship_type": str(relationship["relationship_type"]),
                 "direction": direction,
                 **_observation_payload(observations.get(neighbor_text)),
+                "relationship_status": str(relationship.get("status", "candidate")),
                 "evidence_text": str(relationship["evidence_text"]),
                 "confidence": float(relationship["confidence"]),
             }

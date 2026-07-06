@@ -50,6 +50,7 @@ def test_live_neo4j_write_is_idempotent_and_queryable(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     graph = load_artifact_graph(artifact_path, probe_run_id=f"test:{run_id}")
+    term_id = next(iter(graph.terms))
     settings = load_neo4j_settings()
 
     with neo4j_session(settings) as session:
@@ -82,7 +83,7 @@ def test_live_neo4j_write_is_idempotent_and_queryable(tmp_path: Path) -> None:
                       recall_observation_count, count(recall) AS has_recall_count
                     """,
                     source_key=f"test:{run_id}:1",
-                    term_id=f"term:{run_id}:alpha",
+                    term_id=term_id,
                     probe_run_id=f"test:{run_id}",
                 )
             )
@@ -110,9 +111,11 @@ def test_live_neo4j_write_is_idempotent_and_queryable(tmp_path: Path) -> None:
                 WHERE n.term_id STARTS WITH $term_prefix
                   OR n.canonical_source_key STARTS WITH $source_prefix
                   OR n.probe_run_id = $probe_run_id
+                  OR n.term_id = $term_id
                 DETACH DELETE n
                 """,
                 term_prefix=f"term:{run_id}:",
+                term_id=term_id,
                 source_prefix=f"test:{run_id}:",
                 probe_run_id=f"test:{run_id}",
             )

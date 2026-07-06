@@ -276,6 +276,7 @@ def query_neo4j_response(
               source_text: source.text,
               target_text: target.text,
               relationship_type: type(relationship),
+              status: relationship.status,
               evidence_text: relationship.evidence_text,
               confidence: relationship.confidence
             } AS relationship,
@@ -307,6 +308,7 @@ def query_neo4j_response(
             "relationship payload",
         )
         _required_record_str(relationship, "relationship_type", "relationship payload")
+        _required_record_str(relationship, "status", "relationship payload")
         _required_record_str(relationship, "evidence_text", "relationship payload")
         relationship["confidence"] = _required_record_number(
             relationship,
@@ -347,7 +349,6 @@ def load_artifact_graph(
     jobs: dict[str, dict[str, Any]] = {}
     terms: dict[str, dict[str, Any]] = {}
     term_ids_by_text: dict[str, str] = {}
-    term_text_context: dict[str, tuple[str, str, int]] = {}
     mentioned_in: list[dict[str, Any]] = []
 
     for line_number, row in rows:
@@ -362,28 +363,26 @@ def load_artifact_graph(
             "source_url": None if source_url is None else str(source_url),
         }
 
-        term_id = _required_str(row, "term_id", line_number)
         text = _required_str(row, "text", line_number)
-        if text in term_text_context:
-            first_term_id, first_source_key, first_line_number = term_text_context[text]
-            raise ArtifactGraphError(
-                f"line {line_number}: duplicate term text {text} "
-                f"(first term_id {first_term_id}, "
-                f"first canonical_source_key {first_source_key}, "
-                f"first line {first_line_number}, duplicate term_id {term_id}, "
-                f"duplicate canonical_source_key {canonical_source_key})"
+        normalized_text = _required_str(row, "normalized_text", line_number)
+        term_id = _query_term_id(normalized_text)
+        evidence_count = _int_field(row, "evidence_count", line_number, default=1)
+        if term_id not in terms:
+            terms[term_id] = {
+                "term_id": term_id,
+                "text": text,
+                "normalized_text": normalized_text,
+                "term_category": _required_str(row, "term_category", line_number),
+                "language": _required_str(row, "language", line_number),
+                "source": str(row.get("source", "llm_graphrag")),
+                "status": str(row.get("status", "candidate")),
+                "evidence_count": evidence_count,
+            }
+        else:
+            terms[term_id]["text"] = min(str(terms[term_id]["text"]), text)
+            terms[term_id]["evidence_count"] = (
+                int(terms[term_id]["evidence_count"]) + evidence_count
             )
-        term_text_context[text] = (term_id, canonical_source_key, line_number)
-        terms[term_id] = {
-            "term_id": term_id,
-            "text": text,
-            "normalized_text": _required_str(row, "normalized_text", line_number),
-            "term_category": _required_str(row, "term_category", line_number),
-            "language": _required_str(row, "language", line_number),
-            "source": str(row.get("source", "llm_graphrag")),
-            "status": str(row.get("status", "candidate")),
-            "evidence_count": _int_field(row, "evidence_count", line_number, default=1),
-        }
         term_ids_by_text[text] = term_id
         mentioned_in.append(_map_mention_row(row, line_number, term_id, job_id))
 
@@ -626,11 +625,11 @@ def _required_record_str(
     payload_name: str,
 ) -> str:
     value = row.get(field_name)
-    if value is None or str(value) == "":
+    if not isinstance(value, str) or value == "":
         raise ArtifactGraphError(
             f"Neo4j query returned {payload_name} with missing {field_name}"
         )
-    return str(value)
+    return value
 
 
 def _required_record_number(
@@ -720,3 +719,7 @@ def _normalize_query(query: str) -> str:
 def _stable_hash(prefix: str, *parts: str) -> str:
     payload = "\x1f".join([prefix, *parts]).encode("utf-8")
     return f"{prefix}:{hashlib.sha256(payload).hexdigest()}"
+
+
+def _query_term_id(normalized_text: str) -> str:
+    return _stable_hash("query-term", normalized_text)

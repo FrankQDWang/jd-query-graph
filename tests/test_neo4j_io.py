@@ -141,6 +141,7 @@ def _relationship_record(
     target_text: str,
     *,
     observation_text: str,
+    status: str = "candidate",
 ) -> FakeRecord:
     return FakeRecord(
         {
@@ -150,6 +151,7 @@ def _relationship_record(
                 "relationship_type": "RELATED_TO",
                 "evidence_text": "alpha beta",
                 "confidence": 0.74,
+                "status": status,
             },
             "neighbor_observation": _recall_observation(observation_text),
         }
@@ -260,14 +262,16 @@ def test_load_artifact_graph_maps_terms_jobs_evidence_and_fake_recall(
             "source_url": "https://example.invalid/job/1",
         }
     ]
-    assert graph.terms["term:alpha"]["text"] == "term-alpha"
-    assert graph.terms["term:alpha"]["normalized_text"] == "term-alpha"
-    assert graph.mentioned_in[0]["term_id"] == "term:alpha"
+    term_id, term = next(iter(graph.terms.items()))
+    assert term_id.startswith("query-term:")
+    assert term["text"] == "term-alpha"
+    assert term["normalized_text"] == "term-alpha"
+    assert graph.mentioned_in[0]["term_id"] == term_id
     assert graph.mentioned_in[0]["canonical_source_key"] == "detail_id:1"
     assert graph.mentioned_in[0]["evidence_text"] == "candidate requirement alpha"
     assert graph.recall_observations["term-alpha"]["status"] == "ok"
     assert graph.recall_observations["term-alpha"]["total"] == 0
-    assert graph.has_recall[0]["term_id"] == "term:alpha"
+    assert graph.has_recall[0]["term_id"] == term_id
 
 
 def test_load_artifact_graph_maps_relationship_rows(tmp_path: Path) -> None:
@@ -325,12 +329,18 @@ def test_load_artifact_graph_maps_relationship_rows(tmp_path: Path) -> None:
     )
 
     graph = load_artifact_graph(artifact_path)
+    alpha_id = next(
+        term_id for term_id, term in graph.terms.items() if term["text"] == "term-alpha"
+    )
+    beta_id = next(
+        term_id for term_id, term in graph.terms.items() if term["text"] == "term-beta"
+    )
 
     assert graph.term_relationships == [
         {
             "relationship_hash": graph.term_relationships[0]["relationship_hash"],
-            "source_term_id": "term:alpha",
-            "target_term_id": "term:beta",
+            "source_term_id": alpha_id,
+            "target_term_id": beta_id,
             "source_text": "term-alpha",
             "target_text": "term-beta",
             "relationship_type": "RELATED_TO",
@@ -386,7 +396,7 @@ def test_load_artifact_graph_rejects_relationship_with_missing_term(
         load_artifact_graph(artifact_path)
 
 
-def test_load_artifact_graph_rejects_duplicate_term_text_with_line_context(
+def test_load_artifact_graph_merges_duplicate_term_text_across_jobs(
     tmp_path: Path,
 ) -> None:
     artifact_path = tmp_path / "extraction.jsonl"
@@ -398,17 +408,58 @@ def test_load_artifact_graph_rejects_duplicate_term_text_with_line_context(
         ],
     )
 
-    with pytest.raises(
-        ArtifactGraphError,
-        match=(
-            r"line 2: duplicate term text shared-term .*"
-            r"first term_id term:alpha.*"
-            r"first canonical_source_key detail_id:1.*"
-            r"duplicate term_id term:beta.*"
-            r"duplicate canonical_source_key detail_id:2"
-        ),
-    ):
-        load_artifact_graph(artifact_path)
+    graph = load_artifact_graph(artifact_path)
+
+    assert len(graph.jobs) == 2
+    assert len(graph.terms) == 1
+    assert len(graph.mentioned_in) == 2
+    assert len(graph.recall_observations) == 1
+    term = next(iter(graph.terms.values()))
+    assert term["term_id"].startswith("query-term:")
+    assert term["text"] == "shared-term"
+    assert term["normalized_text"] == "shared-term"
+    assert term["evidence_count"] == 2
+    assert {mention["term_id"] for mention in graph.mentioned_in} == {
+        term["term_id"]
+    }
+    assert graph.has_recall == [
+        {
+            "term_id": term["term_id"],
+            "observation_id": graph.recall_observations["shared-term"][
+                "observation_id"
+            ],
+            "provider": "fake-cts",
+            "query_mode": "exact",
+            "probe_run_id": "fake-probe-run",
+            "created_at": graph.recall_observations["shared-term"]["created_at"],
+        }
+    ]
+
+
+def test_load_artifact_graph_relationships_resolve_to_merged_term_ids(
+    tmp_path: Path,
+) -> None:
+    artifact_path = tmp_path / "extraction.jsonl"
+    _write_jsonl(
+        artifact_path,
+        [
+            _term_row("term:alpha-1", "term-alpha", canonical_source_key="detail_id:1"),
+            _term_row("term:alpha-2", "term-alpha", canonical_source_key="detail_id:2"),
+            _term_row("term:beta", "term-beta", canonical_source_key="detail_id:1"),
+            _relationship_row(),
+        ],
+    )
+
+    graph = load_artifact_graph(artifact_path)
+    alpha_id = next(
+        term_id for term_id, term in graph.terms.items() if term["text"] == "term-alpha"
+    )
+    beta_id = next(
+        term_id for term_id, term in graph.terms.items() if term["text"] == "term-beta"
+    )
+
+    assert graph.term_relationships[0]["source_term_id"] == alpha_id
+    assert graph.term_relationships[0]["target_term_id"] == beta_id
 
 
 def test_load_artifact_graph_rejects_malformed_json_with_line_context(
@@ -514,14 +565,13 @@ def test_write_artifact_graph_runs_schema_and_idempotent_merge_calls(
         "{relationship_hash: $relationship_hash}]->(target)"
         in combined_cypher
     )
-    assert any(
-        parameters.get("term_id") == "term:alpha"
+    expected_term_ids = set(graph.terms)
+    written_term_ids = {
+        parameters.get("term_id")
         for _cypher, parameters in session.calls
-    )
-    assert any(
-        parameters.get("term_id") == "term:beta"
-        for _cypher, parameters in session.calls
-    )
+        if "term_id" in parameters
+    }
+    assert expected_term_ids <= written_term_ids
 
 
 def test_write_artifact_graph_rejects_unsupported_term_relationship_type() -> None:
@@ -583,11 +633,13 @@ def test_query_neo4j_response_returns_exact_match_with_outgoing_relationship() -
                 "direction": "outgoing",
                 "cts_total": 0,
                 "status": "ok",
+                "relationship_status": "candidate",
                 "evidence_text": "alpha beta",
                 "confidence": 0.74,
             }
         ],
     }
+    assert "status: relationship.status" in _single_line_cypher(session.calls[1][0])
     assert session.calls[0][1]["query"] == "term-alpha"
     assert session.calls[0][1]["normalized_query"] == "term-alpha"
     assert session.calls[1][1]["term_id"] == "term:alpha"
@@ -665,10 +717,27 @@ def test_query_neo4j_response_returns_incoming_relationship_direction() -> None:
             "direction": "incoming",
             "cts_total": 0,
             "status": "ok",
+            "relationship_status": "candidate",
             "evidence_text": "alpha beta",
             "confidence": 0.74,
         }
     ]
+
+
+def test_query_neo4j_response_rejects_non_string_relationship_status() -> None:
+    record = _relationship_record(
+        "term-alpha",
+        "term-beta",
+        observation_text="term-beta",
+    )
+    record["relationship"]["status"] = 3
+    session = FakeQuerySession(
+        term_rows=[_term_record("term-alpha")],
+        relationship_rows=[record],
+    )
+
+    with pytest.raises(ArtifactGraphError, match="missing status"):
+        query_neo4j_response(session, "term-alpha")
 
 
 def test_query_neo4j_response_rejects_unexpected_term_record_shape() -> None:
