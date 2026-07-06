@@ -84,6 +84,7 @@ def load_artifact_graph(
     jobs: dict[str, dict[str, Any]] = {}
     terms: dict[str, dict[str, Any]] = {}
     term_ids_by_text: dict[str, str] = {}
+    term_text_context: dict[str, tuple[str, str, int]] = {}
     mentioned_in: list[dict[str, Any]] = []
 
     for line_number, row in rows:
@@ -100,6 +101,16 @@ def load_artifact_graph(
 
         term_id = _required_str(row, "term_id", line_number)
         text = _required_str(row, "text", line_number)
+        if text in term_text_context:
+            first_term_id, first_source_key, first_line_number = term_text_context[text]
+            raise ArtifactGraphError(
+                f"line {line_number}: duplicate term text {text} "
+                f"(first term_id {first_term_id}, "
+                f"first canonical_source_key {first_source_key}, "
+                f"first line {first_line_number}, duplicate term_id {term_id}, "
+                f"duplicate canonical_source_key {canonical_source_key})"
+            )
+        term_text_context[text] = (term_id, canonical_source_key, line_number)
         terms[term_id] = {
             "term_id": term_id,
             "text": text,
@@ -108,7 +119,7 @@ def load_artifact_graph(
             "language": _required_str(row, "language", line_number),
             "source": str(row.get("source", "llm_graphrag")),
             "status": str(row.get("status", "candidate")),
-            "evidence_count": int(row.get("evidence_count", 1)),
+            "evidence_count": _int_field(row, "evidence_count", line_number, default=1),
         }
         term_ids_by_text[text] = term_id
         mentioned_in.append(_map_mention_row(row, line_number, term_id, job_id))
@@ -133,7 +144,12 @@ def _read_artifact_rows(path: Path) -> list[tuple[int, dict[str, Any]]]:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
-            payload = json.loads(line)
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ArtifactGraphError(
+                    f"line {line_number}: invalid JSON: {error.msg}"
+                ) from error
             if not isinstance(payload, dict):
                 raise ArtifactGraphError(f"line {line_number}: row must be an object")
             rows.append((line_number, payload))
@@ -172,7 +188,7 @@ def _map_mention_row(
         "char_end": row.get("char_end"),
         "extractor": _required_str(row, "extractor", line_number),
         "model": _required_str(row, "model", line_number),
-        "confidence": float(row.get("confidence", 0)),
+        "confidence": _number_field(row, "confidence", line_number, default=0),
         "status": str(row.get("status", "candidate")),
     }
 
@@ -250,7 +266,7 @@ def _map_relationship_rows(
                 "evidence_text": evidence_text,
                 "source_jd_ids": row.get("source_jd_ids", []),
                 "candidate_source": _required_str(row, "candidate_source", line_number),
-                "confidence": float(row.get("confidence", 0)),
+                "confidence": _number_field(row, "confidence", line_number, default=0),
                 "status": str(row.get("status", "candidate")),
                 "relation_rationale": row.get("relation_rationale"),
                 "extractor": str(row.get("extractor", "")),
@@ -265,6 +281,36 @@ def _required_str(row: dict[str, Any], field_name: str, line_number: int) -> str
     if value is None or str(value) == "":
         raise ArtifactGraphError(f"line {line_number}: missing {field_name}")
     return str(value)
+
+
+def _int_field(
+    row: dict[str, Any],
+    field_name: str,
+    line_number: int,
+    *,
+    default: int,
+) -> int:
+    value = row.get(field_name, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ArtifactGraphError(
+            f"line {line_number} field {field_name}: expected number"
+        )
+    return value
+
+
+def _number_field(
+    row: dict[str, Any],
+    field_name: str,
+    line_number: int,
+    *,
+    default: float,
+) -> float:
+    value = row.get(field_name, default)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ArtifactGraphError(
+            f"line {line_number} field {field_name}: expected number"
+        )
+    return float(value)
 
 
 def _stable_hash(prefix: str, *parts: str) -> str:

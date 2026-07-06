@@ -19,6 +19,52 @@ def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
     )
 
 
+def _term_row(
+    term_id: str,
+    text: str,
+    *,
+    canonical_source_key: str = "detail_id:1",
+    confidence: object = 0.8,
+    evidence_count: object = 1,
+) -> dict[str, object]:
+    return {
+        "record_type": "term",
+        "canonical_source_key": canonical_source_key,
+        "term_id": term_id,
+        "text": text,
+        "normalized_text": text,
+        "term_category": "TECH_OBJECT",
+        "language": "en",
+        "source": "llm_graphrag",
+        "status": "candidate",
+        "evidence_count": evidence_count,
+        "evidence_text": f"evidence for {text}",
+        "source_field": "title",
+        "confidence": confidence,
+        "extractor": "fake-graphrag",
+        "model": "fake-model",
+    }
+
+
+def _relationship_row() -> dict[str, object]:
+    return {
+        "record_type": "relationship",
+        "canonical_source_key": "detail_id:1",
+        "source_text": "term-alpha",
+        "target_text": "term-beta",
+        "relationship_type": "RELATED_TO",
+        "evidence_type": "same_jd_context",
+        "evidence_text": "alpha beta",
+        "source_jd_ids": ["detail_id:1"],
+        "candidate_source": "fake-graphrag",
+        "confidence": 0.74,
+        "status": "candidate",
+        "relation_rationale": "Both terms appear in one JD.",
+        "extractor": "fake-graphrag",
+        "model": "fake-model",
+    }
+
+
 def test_neo4j_settings_default_to_local_compose_credentials(monkeypatch) -> None:
     for name in [
         "JD_QUERY_GRAPH_NEO4J_URI",
@@ -243,3 +289,79 @@ def test_load_artifact_graph_rejects_relationship_with_missing_term(
 
     with pytest.raises(ArtifactGraphError, match="missing target term"):
         load_artifact_graph(artifact_path)
+
+
+def test_load_artifact_graph_rejects_duplicate_term_text_with_line_context(
+    tmp_path: Path,
+) -> None:
+    artifact_path = tmp_path / "extraction.jsonl"
+    _write_jsonl(
+        artifact_path,
+        [
+            _term_row("term:alpha", "shared-term", canonical_source_key="detail_id:1"),
+            _term_row("term:beta", "shared-term", canonical_source_key="detail_id:2"),
+        ],
+    )
+
+    with pytest.raises(
+        ArtifactGraphError,
+        match=(
+            r"line 2: duplicate term text shared-term .*"
+            r"first term_id term:alpha.*"
+            r"first canonical_source_key detail_id:1.*"
+            r"duplicate term_id term:beta.*"
+            r"duplicate canonical_source_key detail_id:2"
+        ),
+    ):
+        load_artifact_graph(artifact_path)
+
+
+def test_load_artifact_graph_rejects_malformed_json_with_line_context(
+    tmp_path: Path,
+) -> None:
+    artifact_path = tmp_path / "extraction.jsonl"
+    artifact_path.write_text('{"record_type": "term"\n', encoding="utf-8")
+
+    with pytest.raises(ArtifactGraphError, match="line 1: invalid JSON"):
+        load_artifact_graph(artifact_path)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "expected_message"),
+    [
+        ("confidence", "line 1 field confidence: expected number"),
+        ("evidence_count", "line 1 field evidence_count: expected number"),
+    ],
+)
+def test_load_artifact_graph_rejects_invalid_numeric_fields_with_context(
+    tmp_path: Path,
+    field_name: str,
+    expected_message: str,
+) -> None:
+    artifact_path = tmp_path / "extraction.jsonl"
+    row = _term_row("term:alpha", "term-alpha")
+    row[field_name] = "not-a-number"
+    _write_jsonl(artifact_path, [row])
+
+    with pytest.raises(ArtifactGraphError, match=expected_message):
+        load_artifact_graph(artifact_path)
+
+
+def test_load_artifact_graph_relationship_hash_is_stable_when_terms_reordered(
+    tmp_path: Path,
+) -> None:
+    first_artifact_path = tmp_path / "first.jsonl"
+    second_artifact_path = tmp_path / "second.jsonl"
+    alpha = _term_row("term:alpha", "term-alpha")
+    beta = _term_row("term:beta", "term-beta")
+    relationship = _relationship_row()
+    _write_jsonl(first_artifact_path, [alpha, beta, relationship])
+    _write_jsonl(second_artifact_path, [beta, alpha, relationship])
+
+    first_graph = load_artifact_graph(first_artifact_path)
+    second_graph = load_artifact_graph(second_artifact_path)
+
+    assert (
+        first_graph.term_relationships[0]["relationship_hash"]
+        == second_graph.term_relationships[0]["relationship_hash"]
+    )
