@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,8 +13,14 @@ class Neo4jSettings(BaseSettings):
 
     uri: str = "bolt://localhost:7687"
     user: str = "neo4j"
-    password: str = Field(default="password", repr=False, exclude=True)
+    password: SecretStr = Field(default=SecretStr("password"), repr=False, exclude=True)
     database: str = "neo4j"
+
+    @property
+    def password_value(self) -> str:
+        """Return the raw password for deliberate credential use."""
+
+        return self.password.get_secret_value()
 
 
 def load_neo4j_settings() -> Neo4jSettings:

@@ -16,16 +16,17 @@ def test_neo4j_settings_default_to_local_compose_credentials(monkeypatch) -> Non
 
     settings = load_neo4j_settings()
 
-    assert settings == Neo4jSettings(
-        uri="bolt://localhost:7687",
-        user="neo4j",
-        password="password",
-        database="neo4j",
-    )
+    assert settings.uri == "bolt://localhost:7687"
+    assert settings.user == "neo4j"
+    assert settings.password_value == "password"
+    assert settings.database == "neo4j"
+    assert settings == Neo4jSettings()
     assert "password" not in repr(settings)
 
 
-def test_neo4j_settings_read_environment(monkeypatch) -> None:
+def test_neo4j_settings_read_environment_without_serializing_secret(
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("JD_QUERY_GRAPH_NEO4J_URI", "bolt://example.invalid:7687")
     monkeypatch.setenv("JD_QUERY_GRAPH_NEO4J_USER", "graph_user")
     monkeypatch.setenv("JD_QUERY_GRAPH_NEO4J_PASSWORD", "graph_secret")
@@ -33,15 +34,17 @@ def test_neo4j_settings_read_environment(monkeypatch) -> None:
 
     settings = load_neo4j_settings()
 
-    assert settings == Neo4jSettings(
-        uri="bolt://example.invalid:7687",
-        user="graph_user",
-        password="graph_secret",
-        database="graph_db",
-    )
+    assert settings.uri == "bolt://example.invalid:7687"
+    assert settings.user == "graph_user"
+    assert settings.password_value == "graph_secret"
+    assert settings.database == "graph_db"
     assert "graph_secret" not in repr(settings)
+    assert "graph_secret" not in str(settings)
     assert "password" not in settings.model_dump()
     assert "graph_secret" not in str(settings.model_dump())
+    assert "graph_secret" not in settings.model_dump_json()
+    assert "graph_secret" not in str(dict(settings))
+    assert not isinstance(dict(settings)["password"], str)
 
 
 def test_schema_statements_define_phase2a_constraints_and_indexes() -> None:
