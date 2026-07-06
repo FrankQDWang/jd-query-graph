@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from jd_query_graph.query import build_query_response
@@ -639,7 +639,14 @@ def _observation_mapping(
             "Neo4j query returned observation payload in unexpected shape"
         )
     _validate_recall_observation_payload(term_text, payload)
-    return {term_text: RecallObservation.model_validate(payload)}
+    try:
+        observation = RecallObservation.model_validate(payload)
+    except ValidationError as error:
+        raise ArtifactGraphError(
+            f"Neo4j query returned invalid recall observation for {term_text}: "
+            f"{_validation_error_context(error)}"
+        ) from error
+    return {term_text: observation}
 
 
 def _validate_recall_observation_payload(
@@ -675,6 +682,17 @@ def _validate_recall_observation_payload(
                 f"Neo4j query returned observation payload for {term_text} "
                 f"field {field_name}: expected {expected_type}"
             )
+
+
+def _validation_error_context(error: ValidationError) -> str:
+    first_error = next(iter(error.errors()), None)
+    if first_error is None:
+        return "validation failed"
+    location = ".".join(str(part) for part in first_error.get("loc", ()))
+    message = str(first_error.get("msg", "validation failed"))
+    if location:
+        return f"{location}: {message}"
+    return message
 
 
 def _normalize_query(query: str) -> str:

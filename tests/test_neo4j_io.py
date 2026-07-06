@@ -724,3 +724,41 @@ def test_query_neo4j_response_rejects_unexpected_observation_key() -> None:
         match="observation payload for term-alpha has unexpected keys: unexpected",
     ):
         query_neo4j_response(session, "term-alpha")
+
+
+def test_query_neo4j_response_wraps_missing_observation_status() -> None:
+    observation = _recall_observation("term-alpha")
+    del observation["status"]
+    session = FakeQuerySession(
+        term_rows=[
+            _term_record(
+                "term-alpha",
+                observation=observation,
+            )
+        ]
+    )
+
+    with pytest.raises(
+        ArtifactGraphError,
+        match="invalid recall observation for term-alpha",
+    ):
+        query_neo4j_response(session, "term-alpha")
+
+
+def test_query_neo4j_response_wraps_negative_observation_total() -> None:
+    observation = _recall_observation("term-alpha")
+    observation["total"] = -1
+    session = FakeQuerySession(
+        term_rows=[
+            _term_record(
+                "term-alpha",
+                observation=observation,
+            )
+        ]
+    )
+
+    with pytest.raises(
+        ArtifactGraphError,
+        match="invalid recall observation for term-alpha",
+    ):
+        query_neo4j_response(session, "term-alpha")
