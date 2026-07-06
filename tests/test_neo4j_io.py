@@ -93,9 +93,16 @@ class FakeQuerySession:
         self.relationship_rows = relationship_rows or []
         self.calls: list[tuple[str, dict[str, object]]] = []
 
-    def run(self, cypher: str, **parameters: object) -> list[FakeRecord]:
-        self.calls.append((cypher, parameters))
-        if "RETURN properties(term) AS term" in cypher:
+    def run(
+        self,
+        query: str,
+        parameters: dict[str, object] | None = None,
+        **kwargs: object,
+    ) -> list[FakeRecord]:
+        merged_parameters = dict(parameters or {})
+        merged_parameters.update(kwargs)
+        self.calls.append((query, merged_parameters))
+        if "RETURN properties(term) AS term" in query:
             return self.term_rows
         return self.relationship_rows
 

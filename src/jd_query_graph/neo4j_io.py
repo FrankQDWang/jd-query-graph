@@ -36,7 +36,12 @@ NULLABLE_RECALL_OBSERVATION_FIELDS = {"total", "recall_bucket", "error_code"}
 
 
 class Neo4jSession(Protocol):
-    def run(self, cypher: str, **parameters: object) -> object:
+    def run(
+        self,
+        query: str,
+        parameters: dict[str, object] | None = None,
+        **kwargs: object,
+    ) -> object:
         ...
 
 
@@ -232,8 +237,7 @@ def query_neo4j_response(
               term.text
             LIMIT 1
             """,
-            query=query,
-            normalized_query=normalized_query,
+            {"query": query, "normalized_query": normalized_query},
         )
     )
     if not term_rows:
@@ -282,8 +286,10 @@ def query_neo4j_response(
             } AS relationship,
             properties(neighbor_observation) AS neighbor_observation
             """,
-            term_id=matched_term_id,
-            relationship_types=sorted(TERM_RELATIONSHIP_TYPES),
+            {
+                "term_id": matched_term_id,
+                "relationship_types": sorted(TERM_RELATIONSHIP_TYPES),
+            },
         )
     )
 
