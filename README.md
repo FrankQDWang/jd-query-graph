@@ -97,7 +97,17 @@ uv run --extra dev jd-query-graph write-neo4j-artifact artifacts/extraction/samp
 Query a term from the artifact:
 
 ```bash
-uv run --extra dev jd-query-graph query-neo4j "title: 示例岗位"
+uv run --extra dev jd-query-graph query-neo4j "$(python - <<'PY'
+import json
+from pathlib import Path
+
+for line in Path("artifacts/extraction/sample.jsonl").read_text(encoding="utf-8").splitlines():
+    row = json.loads(line)
+    if row.get("record_type") == "term":
+        print(row["text"])
+        break
+PY
+)"
 ```
 
 The response keeps the Phase 1 query shape: `exact`, `related_terms`, evidence,
