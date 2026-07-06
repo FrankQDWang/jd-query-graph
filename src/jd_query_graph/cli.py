@@ -18,6 +18,13 @@ from jd_query_graph.jd_input import (
     iter_jd_records,
     summarize_jds,
 )
+from jd_query_graph.neo4j_io import (
+    load_artifact_graph,
+    load_neo4j_settings,
+    neo4j_session,
+    query_neo4j_response,
+    write_artifact_graph,
+)
 from jd_query_graph.query import build_query_response
 from jd_query_graph.recall import FakeRecallProvider
 from jd_query_graph.schema import build_graphrag_schema as build_graphrag_schema_payload
@@ -158,6 +165,36 @@ def query_artifact(artifact_jsonl: Path, query: str) -> None:
         relationships=relationships,
         observations=observations,
     )
+    _echo_json({"status": "ok", "response": response})
+
+
+@app.command("write-neo4j-artifact")
+def write_neo4j_artifact(artifact_jsonl: Path) -> None:
+    """Write an extraction artifact into local Neo4j."""
+
+    settings = load_neo4j_settings()
+    graph = load_artifact_graph(artifact_jsonl)
+    with neo4j_session(settings) as session:
+        summary = write_artifact_graph(session, graph)
+    _echo_json(
+        {
+            "status": "ok",
+            "job_count": summary.job_count,
+            "term_count": summary.term_count,
+            "mentioned_in_count": summary.mentioned_in_count,
+            "relationship_count": summary.relationship_count,
+            "recall_observation_count": summary.recall_observation_count,
+        }
+    )
+
+
+@app.command("query-neo4j")
+def query_neo4j(query: str) -> None:
+    """Query local Neo4j and print the query response payload."""
+
+    settings = load_neo4j_settings()
+    with neo4j_session(settings) as session:
+        response = query_neo4j_response(session, query)
     _echo_json({"status": "ok", "response": response})
 
 

@@ -3,6 +3,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+import jd_query_graph.cli as cli
 from jd_query_graph.cli import app
 
 
@@ -278,3 +279,111 @@ def test_query_artifact_command_returns_related_terms(tmp_path: Path) -> None:
     assert payload["status"] == "ok"
     assert payload["response"]["query"] == "term-alpha"
     assert payload["response"]["related_terms"][0]["text"] == "term-beta"
+
+
+def test_write_neo4j_artifact_command_outputs_summary_and_uses_session(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    artifact_path = tmp_path / "extraction.jsonl"
+    settings = object()
+    graph = object()
+    session = object()
+    events: list[tuple[str, object]] = []
+
+    class FakeSummary:
+        def __init__(self) -> None:
+            self.job_count = 1
+            self.term_count = 2
+            self.mentioned_in_count = 3
+            self.relationship_count = 4
+            self.recall_observation_count = 5
+
+    class FakeSessionContext:
+        def __init__(self, received_settings: object) -> None:
+            events.append(("session_settings", received_settings))
+
+        def __enter__(self) -> object:
+            events.append(("enter", session))
+            return session
+
+        def __exit__(self, *exc_info: object) -> None:
+            events.append(("exit", session))
+
+    def fake_load_artifact_graph(path: Path) -> object:
+        events.append(("artifact_path", path))
+        return graph
+
+    def fake_write_artifact_graph(received_session: object, received_graph: object):
+        events.append(("write_session", received_session))
+        events.append(("write_graph", received_graph))
+        return FakeSummary()
+
+    monkeypatch.setattr(cli, "load_neo4j_settings", lambda: settings)
+    monkeypatch.setattr(cli, "load_artifact_graph", fake_load_artifact_graph)
+    monkeypatch.setattr(cli, "neo4j_session", FakeSessionContext)
+    monkeypatch.setattr(cli, "write_artifact_graph", fake_write_artifact_graph)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["write-neo4j-artifact", str(artifact_path)])
+
+    assert result.exit_code == 0
+    assert events == [
+        ("artifact_path", artifact_path),
+        ("session_settings", settings),
+        ("enter", session),
+        ("write_session", session),
+        ("write_graph", graph),
+        ("exit", session),
+    ]
+    assert json.loads(result.output) == {
+        "job_count": 1,
+        "mentioned_in_count": 3,
+        "recall_observation_count": 5,
+        "relationship_count": 4,
+        "status": "ok",
+        "term_count": 2,
+    }
+
+
+def test_query_neo4j_command_outputs_response_and_uses_session(monkeypatch) -> None:
+    settings = object()
+    session = object()
+    response = {"query": "term-alpha", "related_terms": []}
+    events: list[tuple[str, object]] = []
+
+    class FakeSessionContext:
+        def __init__(self, received_settings: object) -> None:
+            events.append(("session_settings", received_settings))
+
+        def __enter__(self) -> object:
+            events.append(("enter", session))
+            return session
+
+        def __exit__(self, *exc_info: object) -> None:
+            events.append(("exit", session))
+
+    def fake_query_neo4j_response(received_session: object, query: str):
+        events.append(("query_session", received_session))
+        events.append(("query", query))
+        return response
+
+    monkeypatch.setattr(cli, "load_neo4j_settings", lambda: settings)
+    monkeypatch.setattr(cli, "neo4j_session", FakeSessionContext)
+    monkeypatch.setattr(cli, "query_neo4j_response", fake_query_neo4j_response)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["query-neo4j", "term-alpha"])
+
+    assert result.exit_code == 0
+    assert events == [
+        ("session_settings", settings),
+        ("enter", session),
+        ("query_session", session),
+        ("query", "term-alpha"),
+        ("exit", session),
+    ]
+    assert json.loads(result.output) == {
+        "response": response,
+        "status": "ok",
+    }

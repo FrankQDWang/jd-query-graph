@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from neo4j import GraphDatabase
 from pydantic import Field, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -76,6 +79,21 @@ def schema_statements() -> list[str]:
         "CREATE INDEX query_term_normalized_text IF NOT EXISTS "
         "FOR (n:QueryTerm) ON (n.normalized_text)",
     ]
+
+
+@contextmanager
+def neo4j_session(settings: Neo4jSettings) -> Iterator[Neo4jSession]:
+    """Open a Neo4j session and close the driver when the context exits."""
+
+    driver = GraphDatabase.driver(
+        settings.uri,
+        auth=(settings.user, settings.password_value),
+    )
+    try:
+        with driver.session(database=settings.database) as session:
+            yield session
+    finally:
+        driver.close()
 
 
 class ArtifactGraphError(ValueError):
