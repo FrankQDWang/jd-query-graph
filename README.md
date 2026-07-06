@@ -72,3 +72,33 @@ uv run --extra dev jd-query-graph write-fake-extraction-artifact data/corpora/by
 ```
 
 `data/` and `artifacts/` are local working directories and are ignored by git.
+
+## Phase 2A Neo4j Write/Read Loop
+
+Start local Neo4j and build a small fake extraction artifact:
+
+```bash
+docker compose up -d neo4j
+uv run --extra dev jd-query-graph copy-corpus
+uv run --extra dev jd-query-graph write-fake-extraction-artifact \
+  data/corpora/bytedance/factual_jobs_mainland.jsonl \
+  --output artifacts/extraction/sample.jsonl \
+  --limit 20
+```
+
+Write the artifact into Neo4j. Running this command twice should report the
+same counts and must not create duplicate graph records:
+
+```bash
+uv run --extra dev jd-query-graph write-neo4j-artifact artifacts/extraction/sample.jsonl
+uv run --extra dev jd-query-graph write-neo4j-artifact artifacts/extraction/sample.jsonl
+```
+
+Query a term from the artifact:
+
+```bash
+uv run --extra dev jd-query-graph query-neo4j "title: 示例岗位"
+```
+
+The response keeps the Phase 1 query shape: `exact`, `related_terms`, evidence,
+relationship status, and fake recall status.
