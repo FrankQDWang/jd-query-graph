@@ -13,7 +13,7 @@ class Neo4jSettings(BaseSettings):
 
     uri: str = "bolt://localhost:7687"
     user: str = "neo4j"
-    password: str = Field(default="password", repr=False)
+    password: str = Field(default="password", repr=False, exclude=True)
     database: str = "neo4j"
 
 

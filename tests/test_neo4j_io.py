@@ -40,6 +40,8 @@ def test_neo4j_settings_read_environment(monkeypatch) -> None:
         database="graph_db",
     )
     assert "graph_secret" not in repr(settings)
+    assert "password" not in settings.model_dump()
+    assert "graph_secret" not in str(settings.model_dump())
 
 
 def test_schema_statements_define_phase2a_constraints_and_indexes() -> None:
