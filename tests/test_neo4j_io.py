@@ -77,6 +77,10 @@ class FakeNeo4jSession:
         return object()
 
 
+def _single_line_cypher(cypher: str) -> str:
+    return " ".join(cypher.split())
+
+
 def test_neo4j_settings_default_to_local_compose_credentials(monkeypatch) -> None:
     for name in [
         "JD_QUERY_GRAPH_NEO4J_URI",
@@ -405,13 +409,32 @@ def test_write_artifact_graph_runs_schema_and_idempotent_merge_calls(
     )
     schema = schema_statements()
     assert [cypher for cypher, _ in session.calls[: len(schema)]] == schema
-    combined_cypher = "\n".join(cypher for cypher, _ in session.calls)
+    combined_cypher = _single_line_cypher(
+        "\n".join(cypher for cypher, _ in session.calls)
+    )
     assert "MERGE (job:JobPosting {job_posting_id: $job_posting_id})" in combined_cypher
     assert "MERGE (term:QueryTerm {term_id: $term_id})" in combined_cypher
-    assert "MERGE (term)-[mentioned:MENTIONED_IN" in combined_cypher
-    assert "MERGE (observation:RecallObservation" in combined_cypher
-    assert "MERGE (term)-[recall:HAS_RECALL" in combined_cypher
-    assert "MERGE (source)-[relationship:RELATED_TO" in combined_cypher
+    assert (
+        "MERGE (term)-[mentioned:MENTIONED_IN "
+        "{evidence_hash: $evidence_hash}]->(job)"
+        in combined_cypher
+    )
+    assert (
+        "MERGE (observation:RecallObservation "
+        "{observation_id: $observation_id})"
+        in combined_cypher
+    )
+    assert (
+        "MERGE (term)-[recall:HAS_RECALL "
+        "{provider: $provider, query_mode: $query_mode, "
+        "probe_run_id: $probe_run_id}]->(observation)"
+        in combined_cypher
+    )
+    assert (
+        "MERGE (source)-[relationship:RELATED_TO "
+        "{relationship_hash: $relationship_hash}]->(target)"
+        in combined_cypher
+    )
     assert any(
         parameters.get("term_id") == "term:alpha"
         for _cypher, parameters in session.calls

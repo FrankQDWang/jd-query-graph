@@ -142,16 +142,15 @@ def write_artifact_graph(
 
     for recall in graph.has_recall:
         session.run(
-            """
-            MATCH (term:QueryTerm {term_id: $term_id})
-            MATCH (observation:RecallObservation {observation_id: $observation_id})
-            MERGE (term)-[recall:HAS_RECALL {
-                provider: $provider,
-                query_mode: $query_mode,
-                probe_run_id: $probe_run_id
-            }]->(observation)
-            SET recall += $properties
-            """,
+            "\n"
+            "            MATCH (term:QueryTerm {term_id: $term_id})\n"
+            "            MATCH (observation:RecallObservation "
+            "{observation_id: $observation_id})\n"
+            "            MERGE (term)-[recall:HAS_RECALL "
+            "{provider: $provider, query_mode: $query_mode, "
+            "probe_run_id: $probe_run_id}]->(observation)\n"
+            "            SET recall += $properties\n"
+            "            ",
             term_id=recall["term_id"],
             observation_id=recall["observation_id"],
             provider=recall["provider"],
@@ -388,14 +387,15 @@ def _term_relationship_write_cypher(relationship_type: str) -> str:
         raise ArtifactGraphError(
             f"unsupported relationship type {relationship_type}"
         )
-    return f"""
-            MATCH (source:QueryTerm {{term_id: $source_term_id}})
-            MATCH (target:QueryTerm {{term_id: $target_term_id}})
-            MERGE (source)-[relationship:{relationship_type} {{
-                relationship_hash: $relationship_hash
-            }}]->(target)
-            SET relationship += $properties
-            """
+    return (
+        "\n"
+        "            MATCH (source:QueryTerm {term_id: $source_term_id})\n"
+        "            MATCH (target:QueryTerm {term_id: $target_term_id})\n"
+        f"            MERGE (source)-[relationship:{relationship_type} "
+        "{relationship_hash: $relationship_hash}]->(target)\n"
+        "            SET relationship += $properties\n"
+        "            "
+    )
 
 
 def _required_str(row: dict[str, Any], field_name: str, line_number: int) -> str:
