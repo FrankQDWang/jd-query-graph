@@ -56,6 +56,36 @@ def test_live_neo4j_write_is_idempotent_and_queryable(tmp_path: Path) -> None:
         try:
             first = write_artifact_graph(session, graph)
             second = write_artifact_graph(session, graph)
+            count_rows = list(
+                session.run(
+                    """
+                    MATCH (job:JobPosting {canonical_source_key: $source_key})
+                    WITH count(job) AS job_count
+                    MATCH (term:QueryTerm {term_id: $term_id})
+                    WITH job_count, count(term) AS term_count
+                    MATCH (observation:RecallObservation {
+                      probe_run_id: $probe_run_id
+                    })
+                    WITH job_count, term_count,
+                      count(observation) AS recall_observation_count
+                    MATCH (term:QueryTerm {term_id: $term_id})
+                      -[mentioned:MENTIONED_IN]->
+                      (job:JobPosting {canonical_source_key: $source_key})
+                    WITH job_count, term_count, recall_observation_count,
+                      count(mentioned) AS mentioned_in_count
+                    MATCH (term:QueryTerm {term_id: $term_id})
+                      -[recall:HAS_RECALL]->
+                      (observation:RecallObservation {
+                        probe_run_id: $probe_run_id
+                      })
+                    RETURN job_count, term_count, mentioned_in_count,
+                      recall_observation_count, count(recall) AS has_recall_count
+                    """,
+                    source_key=f"test:{run_id}:1",
+                    term_id=f"term:{run_id}:alpha",
+                    probe_run_id=f"test:{run_id}",
+                )
+            )
             response = query_neo4j_response(session, f"term-alpha-{run_id}")
 
             assert first == second
@@ -64,6 +94,14 @@ def test_live_neo4j_write_is_idempotent_and_queryable(tmp_path: Path) -> None:
             assert first.mentioned_in_count == 1
             assert first.relationship_count == 0
             assert first.recall_observation_count == 1
+            assert len(count_rows) == 1
+            assert count_rows[0].data() == {
+                "job_count": 1,
+                "term_count": 1,
+                "mentioned_in_count": 1,
+                "recall_observation_count": 1,
+                "has_recall_count": 1,
+            }
             assert response["exact"]["status"] == "ok"
         finally:
             session.run(
