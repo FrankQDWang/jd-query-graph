@@ -6,7 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -14,6 +14,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from jd_query_graph.recall import FakeRecallProvider
 
 TERM_RELATIONSHIP_TYPES = {"SAME_AS", "VARIANT_OF", "RELATED_TO", "CO_OCCURS_WITH"}
+
+
+class Neo4jSession(Protocol):
+    def run(self, cypher: str, **parameters: object) -> object:
+        ...
 
 
 class Neo4jSettings(BaseSettings):
@@ -69,6 +74,108 @@ class ArtifactGraph:
     term_relationships: list[dict[str, Any]]
     recall_observations: dict[str, dict[str, Any]]
     has_recall: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class Neo4jWriteSummary:
+    job_count: int
+    term_count: int
+    mentioned_in_count: int
+    relationship_count: int
+    recall_observation_count: int
+
+
+def write_artifact_graph(
+    session: Neo4jSession,
+    graph: ArtifactGraph,
+    apply_schema_first: bool = True,
+) -> Neo4jWriteSummary:
+    """Write an artifact graph to Neo4j with idempotent MERGE statements."""
+
+    if apply_schema_first:
+        for statement in schema_statements():
+            session.run(statement)
+
+    for job in graph.jobs.values():
+        session.run(
+            """
+            MERGE (job:JobPosting {job_posting_id: $job_posting_id})
+            SET job += $properties
+            """,
+            job_posting_id=job["job_posting_id"],
+            properties=dict(job),
+        )
+
+    for term in graph.terms.values():
+        session.run(
+            """
+            MERGE (term:QueryTerm {term_id: $term_id})
+            SET term += $properties
+            """,
+            term_id=term["term_id"],
+            properties=dict(term),
+        )
+
+    for mention in graph.mentioned_in:
+        session.run(
+            """
+            MATCH (term:QueryTerm {term_id: $term_id})
+            MATCH (job:JobPosting {job_posting_id: $job_posting_id})
+            MERGE (term)-[mentioned:MENTIONED_IN {evidence_hash: $evidence_hash}]->(job)
+            SET mentioned += $properties
+            """,
+            term_id=mention["term_id"],
+            job_posting_id=mention["job_posting_id"],
+            evidence_hash=mention["evidence_hash"],
+            properties=dict(mention),
+        )
+
+    for observation in graph.recall_observations.values():
+        session.run(
+            """
+            MERGE (observation:RecallObservation {observation_id: $observation_id})
+            SET observation += $properties
+            """,
+            observation_id=observation["observation_id"],
+            properties=dict(observation),
+        )
+
+    for recall in graph.has_recall:
+        session.run(
+            """
+            MATCH (term:QueryTerm {term_id: $term_id})
+            MATCH (observation:RecallObservation {observation_id: $observation_id})
+            MERGE (term)-[recall:HAS_RECALL {
+                provider: $provider,
+                query_mode: $query_mode,
+                probe_run_id: $probe_run_id
+            }]->(observation)
+            SET recall += $properties
+            """,
+            term_id=recall["term_id"],
+            observation_id=recall["observation_id"],
+            provider=recall["provider"],
+            query_mode=recall["query_mode"],
+            probe_run_id=recall["probe_run_id"],
+            properties=dict(recall),
+        )
+
+    for relationship in graph.term_relationships:
+        session.run(
+            _term_relationship_write_cypher(str(relationship["relationship_type"])),
+            source_term_id=relationship["source_term_id"],
+            target_term_id=relationship["target_term_id"],
+            relationship_hash=relationship["relationship_hash"],
+            properties=dict(relationship),
+        )
+
+    return Neo4jWriteSummary(
+        job_count=len(graph.jobs),
+        term_count=len(graph.terms),
+        mentioned_in_count=len(graph.mentioned_in),
+        relationship_count=len(graph.term_relationships),
+        recall_observation_count=len(graph.recall_observations),
+    )
 
 
 def load_artifact_graph(
@@ -274,6 +381,21 @@ def _map_relationship_rows(
             }
         )
     return relationships
+
+
+def _term_relationship_write_cypher(relationship_type: str) -> str:
+    if relationship_type not in TERM_RELATIONSHIP_TYPES:
+        raise ArtifactGraphError(
+            f"unsupported relationship type {relationship_type}"
+        )
+    return f"""
+            MATCH (source:QueryTerm {{term_id: $source_term_id}})
+            MATCH (target:QueryTerm {{term_id: $target_term_id}})
+            MERGE (source)-[relationship:{relationship_type} {{
+                relationship_hash: $relationship_hash
+            }}]->(target)
+            SET relationship += $properties
+            """
 
 
 def _required_str(row: dict[str, Any], field_name: str, line_number: int) -> str:

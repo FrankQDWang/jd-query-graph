@@ -4,11 +4,14 @@ from pathlib import Path
 import pytest
 
 from jd_query_graph.neo4j_io import (
+    ArtifactGraph,
     ArtifactGraphError,
     Neo4jSettings,
+    Neo4jWriteSummary,
     load_artifact_graph,
     load_neo4j_settings,
     schema_statements,
+    write_artifact_graph,
 )
 
 
@@ -63,6 +66,15 @@ def _relationship_row() -> dict[str, object]:
         "extractor": "fake-graphrag",
         "model": "fake-model",
     }
+
+
+class FakeNeo4jSession:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def run(self, cypher: str, **parameters: object) -> object:
+        self.calls.append((cypher, parameters))
+        return object()
 
 
 def test_neo4j_settings_default_to_local_compose_credentials(monkeypatch) -> None:
@@ -365,3 +377,67 @@ def test_load_artifact_graph_relationship_hash_is_stable_when_terms_reordered(
         first_graph.term_relationships[0]["relationship_hash"]
         == second_graph.term_relationships[0]["relationship_hash"]
     )
+
+
+def test_write_artifact_graph_runs_schema_and_idempotent_merge_calls(
+    tmp_path: Path,
+) -> None:
+    artifact_path = tmp_path / "extraction.jsonl"
+    _write_jsonl(
+        artifact_path,
+        [
+            _term_row("term:alpha", "term-alpha"),
+            _term_row("term:beta", "term-beta"),
+            _relationship_row(),
+        ],
+    )
+    graph = load_artifact_graph(artifact_path)
+    session = FakeNeo4jSession()
+
+    summary = write_artifact_graph(session, graph)
+
+    assert summary == Neo4jWriteSummary(
+        job_count=1,
+        term_count=2,
+        mentioned_in_count=2,
+        relationship_count=1,
+        recall_observation_count=2,
+    )
+    schema = schema_statements()
+    assert [cypher for cypher, _ in session.calls[: len(schema)]] == schema
+    combined_cypher = "\n".join(cypher for cypher, _ in session.calls)
+    assert "MERGE (job:JobPosting {job_posting_id: $job_posting_id})" in combined_cypher
+    assert "MERGE (term:QueryTerm {term_id: $term_id})" in combined_cypher
+    assert "MERGE (term)-[mentioned:MENTIONED_IN" in combined_cypher
+    assert "MERGE (observation:RecallObservation" in combined_cypher
+    assert "MERGE (term)-[recall:HAS_RECALL" in combined_cypher
+    assert "MERGE (source)-[relationship:RELATED_TO" in combined_cypher
+    assert any(
+        parameters.get("term_id") == "term:alpha"
+        for _cypher, parameters in session.calls
+    )
+    assert any(
+        parameters.get("term_id") == "term:beta"
+        for _cypher, parameters in session.calls
+    )
+
+
+def test_write_artifact_graph_rejects_unsupported_term_relationship_type() -> None:
+    graph = ArtifactGraph(
+        jobs={},
+        terms={},
+        mentioned_in=[],
+        term_relationships=[
+            {
+                "relationship_hash": "relationship:unsupported",
+                "source_term_id": "term:alpha",
+                "target_term_id": "term:beta",
+                "relationship_type": "UNSUPPORTED",
+            }
+        ],
+        recall_observations={},
+        has_recall=[],
+    )
+
+    with pytest.raises(ArtifactGraphError, match="unsupported relationship type"):
+        write_artifact_graph(FakeNeo4jSession(), graph, apply_schema_first=False)
