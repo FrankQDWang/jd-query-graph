@@ -12,7 +12,7 @@
 
 ## Scope Check
 
-This merged plan keeps the completed initial scaffold context and the current Phase 1 execution steps in one document. Phase 1 implements the first testable slice of the approved spec, not the full production system. It deliberately excludes real CTS calls, full 9530-JD extraction, community detection, and production release readiness. Those need separate plans after this slice proves the schema and extraction contracts.
+This merged plan keeps the completed initial scaffold context and the current Phase 1 execution steps in one document. Phase 1 is a contract scaffold: it implements the first testable slice of the approved spec, but it is not the full production system and not the long-term cloud serving design. It deliberately excludes real CTS calls, full 9530-JD extraction, community detection, serving snapshots, auth/rate-limit/audit, load testing, and production release readiness. Those are tracked in `TODOs.md` as Cloud Service Architecture plus Phase 2/3 follow-up plans.
 
 ## Phase 0: Initial Scaffold Context
 
@@ -56,7 +56,7 @@ Phase 1 below supersedes the scaffold schema where the spec says the scaffold wa
 - Create `src/jd_query_graph/artifacts.py`: JSONL artifact writer for extracted terms and relationships.
 - Create `src/jd_query_graph/recall.py`: fake recall provider and recall observation model.
 - Create `src/jd_query_graph/query.py`: in-memory query result assembler for exact term and related terms.
-- Modify `src/jd_query_graph/cli.py`: add `copy-corpus`, `build-graphrag-schema`, `extract-sample`, and `query-artifact`.
+- Modify `src/jd_query_graph/cli.py`: add `copy-corpus`, `build-graphrag-schema`, `write-fake-extraction-artifact`, and `query-artifact`.
 - Add tests under `tests/` for every new contract.
 
 ## Task 1: Repository Workflow Contract
@@ -133,10 +133,11 @@ Create `tests/test_corpus.py`:
 from pathlib import Path
 
 from jd_query_graph.corpus import (
-    BYTE_DANCE_MAINLAND_SOURCE,
+    CORPUS_SOURCE_ENV,
     DEFAULT_LOCAL_CORPUS,
     CorpusCopyResult,
     copy_corpus,
+    resolve_corpus_source,
 )
 
 
@@ -156,14 +157,16 @@ def test_copy_corpus_copies_source_to_default_location(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == '{"canonical_source_key":"job-1"}\n'
 
 
-def test_default_paths_are_stable() -> None:
-    assert BYTE_DANCE_MAINLAND_SOURCE == Path(
-        "/Users/frankqdwang/MLE/jd-graph/data/derived/company=bytedance/"
-        "source=jobs_bytedance/factual_jobs_mainland.jsonl"
-    )
+def test_default_local_corpus_path_is_stable() -> None:
     assert DEFAULT_LOCAL_CORPUS == Path(
         "data/corpora/bytedance/factual_jobs_mainland.jsonl"
     )
+
+
+def test_source_path_can_come_from_environment(tmp_path: Path) -> None:
+    source = tmp_path / "source.jsonl"
+
+    assert resolve_corpus_source({CORPUS_SOURCE_ENV: str(source)}) == source
 ```
 
 Extend `tests/test_cli.py` with:
@@ -210,12 +213,15 @@ Create `src/jd_query_graph/corpus.py`:
 
 from __future__ import annotations
 
+import os
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 
-BYTE_DANCE_MAINLAND_SOURCE = Path(
+CORPUS_SOURCE_ENV = "JD_QUERY_GRAPH_CORPUS_SOURCE"
+KNOWN_BYTEDANCE_MAINLAND_SOURCE = Path(
     "/Users/frankqdwang/MLE/jd-graph/data/derived/company=bytedance/"
     "source=jobs_bytedance/factual_jobs_mainland.jsonl"
 )
@@ -231,11 +237,12 @@ class CorpusCopyResult:
 
 
 def copy_corpus(
-    source_path: Path = BYTE_DANCE_MAINLAND_SOURCE,
+    source_path: Path | None = None,
     target_path: Path = DEFAULT_LOCAL_CORPUS,
 ) -> CorpusCopyResult:
     """Copy a local corpus JSONL into this repo's ignored data directory."""
 
+    source_path = resolve_corpus_source(source_path=source_path)
     if not source_path.exists():
         raise FileNotFoundError(f"corpus source does not exist: {source_path}")
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -251,6 +258,20 @@ def copy_corpus(
 def _count_lines(path: Path) -> int:
     with path.open("r", encoding="utf-8") as handle:
         return sum(1 for _ in handle)
+
+
+def resolve_corpus_source(
+    env: Mapping[str, str] | None = None,
+    source_path: Path | None = None,
+) -> Path:
+    """Resolve a source path without making a personal path part of the test contract."""
+
+    if source_path is not None:
+        return source_path
+    environment = env or os.environ
+    if configured := environment.get(CORPUS_SOURCE_ENV):
+        return Path(configured)
+    return KNOWN_BYTEDANCE_MAINLAND_SOURCE
 ```
 
 - [ ] **Step 4: Add CLI command**
@@ -259,7 +280,6 @@ Modify `src/jd_query_graph/cli.py` imports:
 
 ```python
 from jd_query_graph.corpus import (
-    BYTE_DANCE_MAINLAND_SOURCE,
     DEFAULT_LOCAL_CORPUS,
     copy_corpus,
 )
@@ -271,15 +291,15 @@ Add command before `inspect_jds`:
 @app.command()
 def copy_corpus_command(
     source: Annotated[
-        Path,
-        typer.Option("--source", help="Source JD JSONL corpus path."),
-    ] = BYTE_DANCE_MAINLAND_SOURCE,
+        Path | None,
+        typer.Option("--source", help="Source JD JSONL corpus path. Defaults to env or local example path."),
+    ] = None,
     target: Annotated[
         Path,
         typer.Option("--target", help="Target ignored local corpus path."),
     ] = DEFAULT_LOCAL_CORPUS,
 ) -> None:
-    """Copy the known local ByteDance corpus into this repo's ignored data dir."""
+    """Copy a local ByteDance corpus into this repo's ignored data dir."""
 
     result = copy_corpus(source_path=source, target_path=target)
     _echo_json(
@@ -655,6 +675,18 @@ def test_loads_approved_graph_schema() -> None:
         "CO_OCCURS_WITH",
         "HAS_RECALL",
     }
+    relationship_properties = {
+        relationship.name: set(relationship.required_properties)
+        for relationship in graph_config.relationship_types
+    }
+    assert {
+        "source_index",
+        "char_start",
+        "char_end",
+        "model",
+    } <= relationship_properties["MENTIONED_IN"]
+    assert {"source_jd_ids", "model"} <= relationship_properties["SAME_AS"]
+    assert {"sample_evidence"} <= relationship_properties["CO_OCCURS_WITH"]
 
 
 def test_rejects_relationship_with_unknown_endpoint(tmp_path: Path) -> None:
@@ -767,8 +799,12 @@ relationship_types:
     target: JobPosting
     required_properties:
       - source_field
+      - source_index
       - evidence_text
+      - char_start
+      - char_end
       - extractor
+      - model
       - confidence
       - status
   - name: SAME_AS
@@ -778,9 +814,11 @@ relationship_types:
     required_properties:
       - evidence_type
       - evidence_text
+      - source_jd_ids
       - candidate_source
       - confidence
       - extractor
+      - model
       - status
   - name: VARIANT_OF
     description: Query term is a spelling, language, abbreviation, symbol, or version variant of another term.
@@ -789,9 +827,11 @@ relationship_types:
     required_properties:
       - evidence_type
       - evidence_text
+      - source_jd_ids
       - candidate_source
       - confidence
       - extractor
+      - model
       - status
   - name: RELATED_TO
     description: Query terms are related for recruiting search but are not interchangeable.
@@ -800,9 +840,12 @@ relationship_types:
     required_properties:
       - evidence_type
       - evidence_text
+      - source_jd_ids
       - candidate_source
       - confidence
       - extractor
+      - model
+      - relation_rationale
       - status
   - name: CO_OCCURS_WITH
     description: Query terms co-occur in a JD, field, sentence, paragraph, or fixed window.
@@ -813,6 +856,7 @@ relationship_types:
       - window_type
       - support
       - score
+      - sample_evidence
       - status
   - name: HAS_RECALL
     description: Query term has a provider recall count observation.
@@ -825,7 +869,18 @@ relationship_types:
       - created_at
 ```
 
-- [ ] **Step 5: Update config models**
+- [ ] **Step 5: Preserve relationship semantics in implementation notes**
+
+Implement relationship handling with these contract rules:
+
+- No term-term self-loops.
+- `SAME_AS` and `CO_OCCURS_WITH` are symmetric semantics but stored as one canonical ordered pair; query code may expand both directions.
+- `VARIANT_OF` direction is variant term -> canonical term.
+- `RELATED_TO` is directional unless query code explicitly reports reverse traversal with `direction="incoming"`.
+- Only `accepted` relationships enter future serving snapshots; Phase 1 may store `candidate` rows only as contract artifacts.
+- `SAME_AS` is not automatically transitive. Any inferred transitive edge must come from a separate validation run with evidence.
+
+- [ ] **Step 6: Update config models**
 
 Modify `src/jd_query_graph/config.py` to use `NodeLabel`, `TermCategory`, and `RelationshipType.required_properties`. Preserve `ConfigError`, `GraphConfig`, `load_graph_config`, and `graph_config_summary`.
 
@@ -892,7 +947,7 @@ For backward compatibility with existing CLI tests, either update tests or make 
 }
 ```
 
-- [ ] **Step 6: Update CLI config test**
+- [ ] **Step 7: Update CLI config test**
 
 In `tests/test_cli.py`, change `test_validate_config_command_outputs_summary` expectations:
 
@@ -911,7 +966,7 @@ def test_validate_config_command_outputs_summary() -> None:
     assert "SAME_AS" in payload["relationship_types"]
 ```
 
-- [ ] **Step 7: Run tests to verify pass**
+- [ ] **Step 8: Run tests to verify pass**
 
 Run:
 
@@ -921,7 +976,7 @@ uv run --extra dev pytest tests/test_config_models.py tests/test_cli.py -q
 
 Expected: pass.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 Run:
 
@@ -1113,17 +1168,29 @@ def test_fake_extractor_returns_terms_and_candidate_relationships() -> None:
     extractor = FakeGraphRagExtractor(
         terms=[
             ExtractedTerm(
+                term_id="term:alpha",
                 text="term-alpha",
+                normalized_text="term-alpha",
                 term_category="TECH_OBJECT",
+                language="en",
                 evidence_text="负责候选需求甲。",
                 source_field="responsibilities",
+                source_index=0,
+                char_start=0,
+                char_end=8,
                 confidence=0.91,
             ),
             ExtractedTerm(
+                term_id="term:beta",
                 text="term-beta",
+                normalized_text="term-beta",
                 term_category="CAPABILITY",
+                language="en",
                 evidence_text="负责候选需求乙。",
                 source_field="responsibilities",
+                source_index=1,
+                char_start=0,
+                char_end=8,
                 confidence=0.88,
             ),
         ],
@@ -1132,7 +1199,10 @@ def test_fake_extractor_returns_terms_and_candidate_relationships() -> None:
                 source_text="term-alpha",
                 target_text="term-beta",
                 relationship_type="RELATED_TO",
+                evidence_type="same_jd_context",
                 evidence_text="负责候选需求甲。负责候选需求乙。",
+                source_jd_ids=["detail_id:1"],
+                candidate_source="fake-graphrag",
                 confidence=0.74,
                 relation_rationale="Both terms describe engineering automation work in the same JD.",
             )
@@ -1178,10 +1248,19 @@ from jd_query_graph.jd_input import CanonicalJdRecord
 
 
 class ExtractedTerm(BaseModel):
+    term_id: str = Field(min_length=1)
     text: str = Field(min_length=1)
+    normalized_text: str = Field(min_length=1)
     term_category: str = Field(min_length=1)
+    language: str = Field(min_length=1)
+    source: str = "llm_graphrag"
+    status: str = "candidate"
+    evidence_count: int = Field(default=1, ge=1)
     evidence_text: str = Field(min_length=1)
     source_field: str = Field(min_length=1)
+    source_index: int | None = None
+    char_start: int | None = Field(default=None, ge=0)
+    char_end: int | None = Field(default=None, ge=0)
     confidence: float = Field(ge=0.0, le=1.0)
 
 
@@ -1189,8 +1268,12 @@ class ExtractedRelationship(BaseModel):
     source_text: str = Field(min_length=1)
     target_text: str = Field(min_length=1)
     relationship_type: str = Field(min_length=1)
+    evidence_type: str = Field(min_length=1)
     evidence_text: str = Field(min_length=1)
+    source_jd_ids: list[str]
+    candidate_source: str = Field(min_length=1)
     confidence: float = Field(ge=0.0, le=1.0)
+    status: str = "candidate"
     relation_rationale: str | None = None
 
 
@@ -1291,10 +1374,16 @@ def test_write_extraction_artifact_records_evidence(tmp_path: Path) -> None:
     result = ExtractionResult(
         terms=[
             ExtractedTerm(
+                term_id="term:alpha",
                 text="term-alpha",
+                normalized_text="term-alpha",
                 term_category="TECH_OBJECT",
+                language="en",
                 evidence_text="负责候选需求甲。",
                 source_field="responsibilities",
+                source_index=0,
+                char_start=0,
+                char_end=8,
                 confidence=0.91,
             )
         ],
@@ -1303,8 +1392,12 @@ def test_write_extraction_artifact_records_evidence(tmp_path: Path) -> None:
                 source_text="term-alpha",
                 target_text="term-beta",
                 relationship_type="RELATED_TO",
+                evidence_type="same_jd_context",
                 evidence_text="负责候选需求甲。",
+                source_jd_ids=["detail_id:1"],
+                candidate_source="fake-graphrag",
                 confidence=0.74,
+                relation_rationale="Both terms appear in related JD context.",
             )
         ],
         metadata={
@@ -1379,7 +1472,6 @@ def write_extraction_artifact(
                         "source_url": record.source_url,
                         **term.model_dump(),
                         **result.metadata,
-                        "status": "candidate",
                     },
                 )
             for relationship in result.relationships:
@@ -1392,7 +1484,6 @@ def write_extraction_artifact(
                         "source_url": record.source_url,
                         **relationship.model_dump(),
                         **result.metadata,
-                        "status": "candidate",
                     },
                 )
     return {
@@ -1406,7 +1497,7 @@ def _write_row(handle, payload: dict[str, object]) -> None:
     handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
 ```
 
-- [ ] **Step 4: Add `extract-sample` CLI using fake extractor**
+- [ ] **Step 4: Add `write-fake-extraction-artifact` CLI using fake extractor**
 
 In `src/jd_query_graph/cli.py`, import:
 
@@ -1420,7 +1511,7 @@ Add command:
 
 ```python
 @app.command()
-def extract_sample(
+def write_fake_extraction_artifact(
     input_jsonl: Path,
     output: Annotated[
         Path,
@@ -1428,7 +1519,7 @@ def extract_sample(
     ],
     limit: Annotated[int, typer.Option("--limit", min=1)] = 20,
 ) -> None:
-    """Run a deterministic fake extraction sample over canonical JD input."""
+    """Write a deterministic fake extraction artifact over canonical JD input."""
 
     rows = []
     for index, record in enumerate(iter_jd_records(input_jsonl)):
@@ -1439,10 +1530,15 @@ def extract_sample(
         extractor = FakeGraphRagExtractor(
             terms=[
                 ExtractedTerm(
+                    term_id=f"fake:{record.canonical_source_key}",
                     text=first_line,
+                    normalized_text=first_line.strip().casefold(),
                     term_category="UNKNOWN",
+                    language="unknown",
                     evidence_text=first_line,
                     source_field="title",
+                    char_start=0,
+                    char_end=len(first_line),
                     confidence=0.5,
                 )
             ]
@@ -1452,14 +1548,14 @@ def extract_sample(
     _echo_json({"status": "ok", **summary, "output": str(output)})
 ```
 
-This fake command is contract scaffolding only. The real GraphRAG adapter is a later task or plan.
+This fake command is fixture scaffolding only. It is not an extraction quality spike and must not be used as evidence that GraphRAG extraction works. The real GraphRAG adapter is a later task or plan.
 
-- [ ] **Step 5: Add CLI test for extract sample**
+- [ ] **Step 5: Add CLI test for fake artifact writing**
 
 Add to `tests/test_cli.py`:
 
 ```python
-def test_extract_sample_command_writes_artifact(tmp_path: Path) -> None:
+def test_write_fake_extraction_artifact_command_writes_artifact(tmp_path: Path) -> None:
     input_path = tmp_path / "jds.jsonl"
     output_path = tmp_path / "extraction.jsonl"
     input_path.write_text(
@@ -1483,7 +1579,7 @@ def test_extract_sample_command_writes_artifact(tmp_path: Path) -> None:
 
     result = runner.invoke(
         app,
-        ["extract-sample", str(input_path), "--output", str(output_path)],
+        ["write-fake-extraction-artifact", str(input_path), "--output", str(output_path)],
     )
 
     assert result.exit_code == 0
@@ -1535,8 +1631,11 @@ def test_fake_recall_provider_returns_stable_observation() -> None:
 
     assert observation.provider == "fake-cts"
     assert observation.query_text == "term-alpha"
+    assert observation.query_mode == "exact"
     assert observation.total == 42
     assert observation.status == "ok"
+    assert observation.probe_run_id == "fake-probe-run"
+    assert observation.request_hash
 ```
 
 Create `tests/test_query.py`:
@@ -1561,25 +1660,41 @@ def test_build_query_response_returns_exact_and_related_terms() -> None:
         ],
         observations={
             "term-alpha": RecallObservation(
+                observation_id="obs-alpha",
                 provider="fake-cts",
                 query_text="term-alpha",
+                query_mode="exact",
                 total=42,
                 status="ok",
+                recall_bucket="10_99",
+                observed_at="2026-07-03T00:00:00Z",
+                probe_run_id="fake-probe-run",
+                request_hash="hash-alpha",
+                created_at="2026-07-03T00:00:00Z",
             ),
             "term-beta": RecallObservation(
+                observation_id="obs-beta",
                 provider="fake-cts",
                 query_text="term-beta",
+                query_mode="exact",
                 total=8,
                 status="ok",
+                recall_bucket="1_9",
+                observed_at="2026-07-03T00:00:00Z",
+                probe_run_id="fake-probe-run",
+                request_hash="hash-beta",
+                created_at="2026-07-03T00:00:00Z",
             ),
         },
     )
 
     assert response["exact"]["cts_total"] == 42
+    assert response["exact"]["match_type"] == "exact"
     assert response["related_terms"] == [
         {
             "text": "term-beta",
             "relationship_type": "RELATED_TO",
+            "direction": "outgoing",
             "cts_total": 8,
             "status": "ok",
             "evidence_text": "负责候选需求甲。负责候选需求乙。",
@@ -1607,32 +1722,75 @@ Create `src/jd_query_graph/recall.py`:
 
 from __future__ import annotations
 
+import hashlib
+
 from pydantic import BaseModel, Field
 
 
 class RecallObservation(BaseModel):
+    observation_id: str = Field(min_length=1)
     provider: str = "fake-cts"
     query_text: str = Field(min_length=1)
+    query_mode: str = "exact"
     total: int | None = Field(default=None, ge=0)
     status: str
+    recall_bucket: str | None = None
+    observed_at: str = Field(min_length=1)
+    probe_run_id: str = Field(min_length=1)
+    request_hash: str = Field(min_length=1)
+    error_code: str | None = None
+    created_at: str = Field(min_length=1)
 
 
 class FakeRecallProvider:
-    def __init__(self, totals: dict[str, int] | None = None) -> None:
+    def __init__(
+        self,
+        totals: dict[str, int] | None = None,
+        probe_run_id: str = "fake-probe-run",
+        observed_at: str = "2026-07-03T00:00:00Z",
+    ) -> None:
         self._totals = totals or {}
+        self._probe_run_id = probe_run_id
+        self._observed_at = observed_at
 
-    def count(self, query_text: str) -> RecallObservation:
+    def count(self, query_text: str, query_mode: str = "exact") -> RecallObservation:
+        request_hash = _request_hash(query_text=query_text, query_mode=query_mode)
+        base = {
+            "observation_id": f"{self._probe_run_id}:{request_hash}",
+            "query_text": query_text,
+            "query_mode": query_mode,
+            "observed_at": self._observed_at,
+            "probe_run_id": self._probe_run_id,
+            "request_hash": request_hash,
+            "created_at": self._observed_at,
+        }
         if query_text in self._totals:
             return RecallObservation(
-                query_text=query_text,
+                **base,
                 total=self._totals[query_text],
                 status="ok",
+                recall_bucket=_bucket(self._totals[query_text]),
             )
         return RecallObservation(
-            query_text=query_text,
+            **base,
             total=None,
             status="unknown",
         )
+
+
+def _request_hash(query_text: str, query_mode: str) -> str:
+    payload = f"fake-cts:{query_mode}:{query_text}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _bucket(total: int) -> str:
+    if total == 0:
+        return "0"
+    if total < 10:
+        return "1_9"
+    if total < 100:
+        return "10_99"
+    return "100_plus"
 ```
 
 - [ ] **Step 4: Implement query assembler**
@@ -1655,32 +1813,80 @@ def build_query_response(
     terms: Sequence[str],
     relationships: Sequence[Mapping[str, Any]],
     observations: Mapping[str, RecallObservation],
+    snapshot_id: str = "artifact",
+    generated_at: str = "2026-07-03T00:00:00Z",
 ) -> dict[str, Any]:
-    exact_observation = observations.get(query)
+    normalized_query = _normalize_query(query)
+    matched_term = _match_term(query=query, normalized_query=normalized_query, terms=terms)
+    exact_observation = observations.get(matched_term)
     return {
+        "response_version": "query-response-v1",
+        "snapshot_id": snapshot_id,
+        "generated_at": generated_at,
         "query": query,
-        "exact": _term_payload(query, exact_observation),
-        "related_terms": [
+        "normalized_query": normalized_query,
+        "exact": _term_payload(
+            matched_term,
+            exact_observation,
+            match_type="exact" if matched_term == query else "normalized",
+        ),
+        "related_terms": _related_terms(
+            matched_term=matched_term,
+            relationships=relationships,
+            observations=observations,
+        ),
+    }
+
+
+def _normalize_query(query: str) -> str:
+    return " ".join(query.strip().casefold().split())
+
+
+def _match_term(query: str, normalized_query: str, terms: Sequence[str]) -> str:
+    if query in terms:
+        return query
+    for term in terms:
+        if _normalize_query(term) == normalized_query:
+            return term
+    return query
+
+
+def _related_terms(
+    matched_term: str,
+    relationships: Sequence[Mapping[str, Any]],
+    observations: Mapping[str, RecallObservation],
+) -> list[dict[str, Any]]:
+    related = []
+    for relationship in relationships:
+        source_text = str(relationship["source_text"])
+        target_text = str(relationship["target_text"])
+        if source_text == matched_term:
+            neighbor_text = target_text
+            direction = "outgoing"
+        elif target_text == matched_term:
+            neighbor_text = source_text
+            direction = "incoming"
+        else:
+            continue
+        related.append(
             {
-                "text": str(relationship["target_text"]),
+                "text": neighbor_text,
                 "relationship_type": str(relationship["relationship_type"]),
-                **_observation_payload(
-                    observations.get(str(relationship["target_text"]))
-                ),
+                "direction": direction,
+                **_observation_payload(observations.get(neighbor_text)),
                 "evidence_text": str(relationship["evidence_text"]),
                 "confidence": float(relationship["confidence"]),
             }
-            for relationship in relationships
-            if relationship.get("source_text") == query
-        ],
-    }
+        )
+    return related
 
 
 def _term_payload(
     text: str,
     observation: RecallObservation | None,
+    match_type: str,
 ) -> dict[str, Any]:
-    return {"text": text, **_observation_payload(observation)}
+    return {"text": text, "match_type": match_type, **_observation_payload(observation)}
 
 
 def _observation_payload(
@@ -1835,7 +2041,7 @@ uv run --extra dev jd-query-graph validate-config
 uv run --extra dev jd-query-graph build-graphrag-schema
 uv run --extra dev jd-query-graph copy-corpus
 uv run --extra dev jd-query-graph inspect-jds data/corpora/bytedance/factual_jobs_mainland.jsonl
-uv run --extra dev jd-query-graph extract-sample data/corpora/bytedance/factual_jobs_mainland.jsonl --output artifacts/extraction/sample.jsonl --limit 20
+uv run --extra dev jd-query-graph write-fake-extraction-artifact data/corpora/bytedance/factual_jobs_mainland.jsonl --output artifacts/extraction/sample.jsonl --limit 20
 ```
 
 `data/` and `artifacts/` are local working directories and are ignored by git.
@@ -1874,16 +2080,16 @@ Expected:
 
 If the source path is unavailable, stop and report the missing local corpus. Do not substitute synthetic data.
 
-- [ ] **Step 4: Run sample extraction artifact**
+- [ ] **Step 4: Run fake extraction artifact writer**
 
 Run:
 
 ```bash
-uv run --extra dev jd-query-graph extract-sample data/corpora/bytedance/factual_jobs_mainland.jsonl --output artifacts/extraction/sample.jsonl --limit 20
+uv run --extra dev jd-query-graph write-fake-extraction-artifact data/corpora/bytedance/factual_jobs_mainland.jsonl --output artifacts/extraction/sample.jsonl --limit 20
 wc -l artifacts/extraction/sample.jsonl
 ```
 
-Expected: command succeeds and artifact has at least 20 lines.
+Expected: command succeeds and artifact has at least 20 lines. This verifies artifact structure only, not extraction quality.
 
 - [ ] **Step 5: Check for forbidden hardcoded term pairs**
 
@@ -1907,6 +2113,6 @@ git commit -m "docs: document phase1 workflow"
 ## Self-Review Checklist
 
 - Spec coverage: Tasks cover repo workflow, corpus copy, canonical JD parsing, approved schema config, GraphRAG schema export, extraction adapter contract, extraction artifacts, fake recall/query response, and Phase 1 verification.
-- Explicit exclusions: Real CTS, real LLM execution, Neo4j persistence, community detection, and full 9530 extraction are excluded from Phase 1 and require later gated plans.
+- Explicit exclusions: Real CTS, real LLM execution, Neo4j persistence, community detection, serving snapshots, auth/rate-limit/audit, load testing, and full 9530 extraction are excluded from Phase 1 and require later gated plans tracked in `TODOs.md`.
 - No unfinished markers: Every task has concrete files, tests, commands, and expected outcomes.
 - Type consistency: `CanonicalJdRecord`, `build_extraction_text`, `GraphConfig`, `build_graphrag_schema`, `ExtractedTerm`, `ExtractedRelationship`, `ExtractionResult`, `FakeGraphRagExtractor`, `RecallObservation`, and `build_query_response` names are consistent across tasks.
